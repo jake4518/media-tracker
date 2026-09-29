@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.1.0';
+  const VERSION = '2.3.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -99,6 +99,15 @@
     drinks:   { key: 'date',  kind: null,    date: r => r.date || '' },
   };
   const COLOR = { book: 'books', show: 'tv', movie: 'movies' };
+
+  // What identifies a row (matches the script), so edits and deletes never hit a row that moved
+  function fingerprint(section, r) {
+    const v = x => (x === null || x === undefined ? '' : String(x).trim());
+    if (section === 'episodes') return [v(r.show), v(r.season), v(r.episode), v(r.date)].join('|');
+    if (section === 'movies') return [v(r.title), v(r.date)].join('|');
+    if (section === 'drinks') return [v(r.date), v(r.drinks), v(r.reason)].join('|');
+    return v(r.title);
+  }
 
   function records(section) {
     if (section === 'shows') return showList();
@@ -336,6 +345,7 @@
   function route() {
     const path = location.hash.replace(/^#\/?/, '');
     if (LISTS[path]) return Object.assign({ path, list: true }, LISTS[path]);
+    if (path === 'review') return { path, review: true, tab: null, list: false };
     const m = /^tv\/episodes\/(.+)$/.exec(path);
     if (m) return Object.assign({ path, list: true, show: decodeURIComponent(m[1]) }, LISTS['tv/episodes']);
     const tab = TABS.some(t => t.id === path) ? path : 'dashboard';
@@ -355,14 +365,14 @@
     const r = route();
     const focus = captureFocus();
     hideTip();
-    $app.innerHTML = headerHTML(r) + '<main class="page' + (r.list ? ' wide' : '') + '">' + pageHTML(r) + '</main>';
+    $app.innerHTML = headerHTML(r) + '<main class="page' + (r.list ? ' wide' : '') + (r.review ? ' review' : '') + '">' + pageHTML(r) + '</main>';
     restoreFocus(focus);
     bindPage(r);
   }
 
   function headerHTML(r) {
     return '<header class="top"><div class="top-inner">' +
-      '<button class="brand" data-go="#/" aria-label="Media tracker home">media<span>tracker</span></button>' +
+      '<button class="brand" data-go="#/" aria-label="Jake\'s media tracker home">jake&rsquo;s media<span>tracker</span></button>' +
       '<button class="sync" id="sync" data-act="sync"></button>' +
       '<button class="icon-btn" data-act="settings" aria-label="Settings">' + ICONS.gear + '</button>' +
       '<button class="btn primary small" data-act="add">+ Add</button>' +
@@ -382,6 +392,7 @@
   function pageHTML(r) {
     if (!state.data) return '<p class="summary">' + (state.syncError ? esc(state.syncError) : 'Loading your sheet...') + '</p>';
     if (r.list) return listPageHTML(r);
+    if (r.review) return reviewHTML();
     switch (r.tab) {
       case 'books': return booksHTML();
       case 'tv': return tvHTML();
@@ -561,11 +572,16 @@
   }
 
   // ---------- Section stats: this year and all time ----------
-  function statsHTML(yearCells, allCells) {
+  function sinceText(dates) {
+    const first = dates.filter(Boolean).sort()[0];
+    const d = parseISO(first);
+    return d ? 'since ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear() : '';
+  }
+  function statsHTML(yearCells, allCells, since) {
     const cell = c => '<div class="stat"><span class="stat-num' + (c.text ? ' text' : '') + '">' + esc(c.v) + '</span><span class="stat-label">' + esc(c.l) + '</span></div>';
     return '<div class="stat-groups">' +
       '<div class="stat-group"><h3>This year</h3><div class="statgrid">' + yearCells.map(cell).join('') + '</div></div>' +
-      '<div class="stat-group"><h3>All time</h3><div class="statgrid">' + allCells.map(cell).join('') + '</div></div></div>';
+      '<div class="stat-group"><h3>All time' + (since ? ' <span class="since">' + esc(since) + '</span>' : '') + '</h3><div class="statgrid">' + allCells.map(cell).join('') + '</div></div></div>';
   }
   const inYear = d => (d || '').startsWith(thisYear());
   const hoursText = m => num(Math.round(m / 60));
@@ -609,7 +625,7 @@
     const reading = sortedDesc('books', all.filter(r => r.started && !r.finished));
     const today = todayISO();
 
-    let h = statsHTML(bookCells(finished.filter(r => inYear(r.finished))), bookCells(finished));
+    let h = statsHTML(bookCells(finished.filter(r => inYear(r.finished))), bookCells(finished), sinceText(all.map(r => r.started || r.finished)));
 
     h += sectionHead('Currently reading');
     h += '<div class="rows">';
@@ -648,7 +664,7 @@
     const shows = sortedDesc('shows');
     const watching = shows.filter(s => s.status === 'watching');
 
-    let h = statsHTML(tvCells(eps.filter(r => inYear(r.date)), shows.filter(s => inYear(s.last))), tvCells(eps, shows));
+    let h = statsHTML(tvCells(eps.filter(r => inYear(r.date)), shows.filter(s => inYear(s.last))), tvCells(eps, shows), sinceText(eps.map(r => r.date)));
 
     h += sectionHead('Watching now');
     h += '<div class="rows">';
@@ -690,7 +706,7 @@
   function moviesHTML() {
     const all = records('movies');
     const dated = all.map(r => r.date).filter(Boolean).sort();
-    let h = statsHTML(movieCells(all.filter(r => inYear(r.date)), monthsSince(thisYear() + '-01-01')), movieCells(all, monthsSince(dated[0])));
+    let h = statsHTML(movieCells(all.filter(r => inYear(r.date)), monthsSince(thisYear() + '-01-01')), movieCells(all, monthsSince(dated[0])), sinceText(dated));
     h += sectionHead('Recently watched');
     h += rowsHTML('movies', sortedDesc('movies').slice(0, RECENT_ROWS), [
       { label: '', w: '24px', html: r => thumb('movie', r.title, 'xs') },
@@ -720,7 +736,7 @@
     const today = todayISO();
     const yearDays = (daysBetween(thisYear() + '-01-01', today) || 0) + 1;
     const allDays = dated.length ? (daysBetween(dated[0], today) || 0) + 1 : 1;
-    let h = statsHTML(drinkCells(all.filter(r => inYear(r.date)), yearDays), drinkCells(all, allDays));
+    let h = statsHTML(drinkCells(all.filter(r => inYear(r.date)), yearDays), drinkCells(all, allDays), sinceText(dated));
     h += sectionHead('Recent');
     h += rowsHTML('drinks', sortedDesc('drinks').slice(0, RECENT_ROWS), [
       { k: 'date', label: 'Date', w: '64px', fmt: fmtDate, cls: 'muted' },
@@ -864,7 +880,7 @@
   // ---------------------------------------------------------------------------
   function renderSetup() {
     const prev = config || {};
-    $app.innerHTML = '<div class="setup"><span class="brand">media<span>tracker</span></span>' +
+    $app.innerHTML = '<div class="setup"><span class="brand">jake&rsquo;s media<span>tracker</span></span>' +
       '<p>' + (state.needsAuth ? 'Your sheet rejected the saved passcode. Enter it again to reconnect.' : 'Connect this device to your Google Sheet. You only need to do this once per device.') + '</p>' +
       '<form id="setup-form" novalidate>' +
       '<div class="field"><label for="s-url">Apps Script web app URL</label><input id="s-url" type="url" placeholder="https://script.google.com/macros/s/.../exec" value="' + esc(prev.url || '') + '" autocomplete="off"></div>' +
@@ -943,93 +959,284 @@
       (state.fetchedAt ? ' Last updated ' + ago(state.fetchedAt) + '.' : '') +
       ' <b>' + num(matched) + '</b> titles have pictures so far.</p>' +
       '<div class="form-actions plain">' +
-      '<button class="btn" data-act="openFill">Fill in missing info</button>' +
+      '<button class="btn" data-act="openReview">Review and fill in info</button>' +
       '<button class="btn" data-act="syncNow">Refresh from sheet</button>' +
       '<button class="btn" data-act="disconnect">Disconnect this device</button></div>' +
       '<p class="result-count" style="margin-top:18px">Version ' + VERSION + '</p>');
   }
 
 
-  // ---------- Fill in missing info ----------
+
+  // ---------------------------------------------------------------------------
+  // Review and fill: 1) check matches  2) preview changes  3) write
+  // ---------------------------------------------------------------------------
   const FILL_FIELDS = {
-    books: [['author', 'Author'], ['year', 'Year published'], ['pages', 'Pages'], ['genre', 'Genre']],
-    movies: [['runtime', 'Run time'], ['year', 'Release year'], ['genre', 'Genre']],
+    books: [['author', 'Author'], ['year', 'Year'], ['pages', 'Pages'], ['genre', 'Genre']],
+    movies: [['runtime', 'Run time'], ['year', 'Year'], ['genre', 'Genre']],
     episodes: [['runtime', 'Run time'], ['year', 'Year']],
   };
+  const KIND_LABEL = { book: 'Book', movie: 'Movie', show: 'TV' };
 
-  function missingCounts() {
-    const c = { books: {}, movies: {}, episodes: {}, showKeys: new Set() };
-    Object.keys(FILL_FIELDS).forEach(s => FILL_FIELDS[s].forEach(([f]) => { c[s][f] = 0; }));
-    const fromEntry = (section, kind, keyName) => records(section).forEach(r => {
-      const e = entryFor(kind, r[keyName]);
-      if (!e || e.source === 'none') return;
-      FILL_FIELDS[section].forEach(([f]) => { if (blank(r[f]) && !blank((e.info || {})[f])) c[section][f]++; });
-    });
-    fromEntry('books', 'book', 'title');
-    fromEntry('movies', 'movie', 'title');
-    records('episodes').forEach(r => {
-      const e = entryFor('show', r.show);
-      if (!e || e.source !== 'tvmaze') return;
-      if (blank(r.runtime)) { c.episodes.runtime++; c.showKeys.add(norm(r.show)); }
-      if (blank(r.year)) { c.episodes.year++; c.showKeys.add(norm(r.show)); }
-    });
-    return c;
+  function rv() {
+    if (!state.review) state.review = { step: 1, filter: 'all', limits: { flag: 60, fine: 60, done: 30 }, preview: null, off: new Set(), fieldsOff: new Set(), busy: '', result: null };
+    return state.review;
   }
 
-  function openFill() {
-    const c = missingCounts();
-    const group = (section, title, upTo) => {
-      const opts = FILL_FIELDS[section].filter(([f]) => c[section][f] > 0);
-      if (!opts.length) return '<div class="fill-group"><h3>' + title + '</h3><p class="fill-none">Nothing to fill in.</p></div>';
-      return '<div class="fill-group"><h3>' + title + '</h3>' + opts.map(([f, label]) =>
-        '<label class="check"><input type="checkbox" name="' + section + '.' + f + '" data-n="' + c[section][f] + '" checked>' +
-        '<span>' + label + '</span><span class="check-n">' + (upTo ? 'up to ' : '') + num(c[section][f]) + '</span></label>').join('') + '</div>';
+  const looseTitle = s => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9 ]/g, ' ').replace(/^(the|a|an) /, '').replace(/\s+/g, ' ').trim();
+  function similarTitle(a, b) { const x = looseTitle(a), y = looseTitle(b); return !x || !y || x === y || x.includes(y) || y.includes(x); }
+  function authorsOverlap(a, b) {
+    const words = s => String(s || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+    const wa = new Set(words(a));
+    return words(b).some(w => wa.has(w));
+  }
+
+  function reviewItems() {
+    const items = [], seen = new Set();
+    let pending = 0;
+    const add = (kind, title, sheet) => {
+      const key = appKey(kind, title);
+      if (!norm(title) || seen.has(key)) return;
+      seen.add(key);
+      const e = state.idx.get(key);
+      if (!e) { pending++; return; }
+      const flags = e.locked ? [] : reviewFlags(kind, title, e, sheet);
+      const group = e.locked ? 'done' : flags.length ? 'flag' : 'fine';
+      items.push({ kind, title: String(title).trim(), key, e, sheet, flags, group });
     };
-    openModal('<div class="sheet-head"><h2>Fill in missing info</h2>' + closeBtn + '</div>' +
-      '<p class="fill-note">Fills empty cells in your sheet using the matched book, movie and show info. Anything you already typed stays as it is. TV uses the real run time and air date of each episode.</p>' +
-      '<p class="fill-note">Wrong cover means wrong info, so fix any bad matches first.</p>' +
-      group('books', 'Books') + group('movies', 'Movies') + group('episodes', 'TV episodes', true) +
-      '<p class="lookup-msg" id="fill-progress" hidden></p>' +
-      '<div class="form-actions"><button class="btn" data-act="close">Cancel</button><button class="btn primary" id="fill-go"></button></div>',
-      sheet => {
-        const go = sheet.querySelector('#fill-go');
-        const boxes = [...sheet.querySelectorAll('input[type=checkbox]')];
-        const update = () => {
-          const n = boxes.filter(b => b.checked).reduce((s, b) => s + Number(b.dataset.n), 0);
-          go.textContent = n ? 'Fill in ' + num(n) + ' cells' : 'Nothing selected';
-          go.disabled = !n;
-        };
-        boxes.forEach(b => b.addEventListener('change', update));
-        update();
-        go.addEventListener('click', async () => {
-          const sel = { books: [], movies: [], episodes: [] };
-          boxes.filter(b => b.checked).forEach(b => { const [s, f] = b.name.split('.'); sel[s].push(f); });
-          const prog = sheet.querySelector('#fill-progress');
-          const say = t => { prog.hidden = false; prog.textContent = t; };
-          go.disabled = true;
-          boxes.forEach(b => { b.disabled = true; });
-          let total = 0;
-          try {
-            if (sel.books.length) { say('Filling in books...'); total += (await api('fillMissing', { section: 'books', fields: sel.books })).result.filled; }
-            if (sel.movies.length) { say('Filling in movies...'); total += (await api('fillMissing', { section: 'movies', fields: sel.movies })).result.filled; }
-            if (sel.episodes.length) {
-              const keys = [...c.showKeys];
-              for (let i = 0; i < keys.length; i += 8) {
-                say('Filling in TV, show ' + (i + 1) + ' of ' + keys.length + '...');
-                total += (await api('fillMissing', { section: 'episodes', fields: sel.episodes, shows: keys.slice(i, i + 8) })).result.filled;
-              }
-            }
-            say('Done. Reloading your sheet...');
-            closeModal();
-            toast('Filled in ' + num(total) + ' cells');
-            sync(true);
-          } catch (e) {
-            say(e.message + (total ? ' (' + num(total) + ' cells were filled before this.)' : ''));
-            prog.classList.add('bad');
-            go.disabled = false;
-          }
-        });
+    sortedDesc('books').forEach(r => add('book', r.title, { author: r.author, year: r.year }));
+    sortedDesc('movies').forEach(r => add('movie', r.title, { year: r.year, runtime: r.runtime }));
+    sortedDesc('shows').forEach(s => {
+      const years = records('episodes').filter(r => norm(r.show) === s.key && Number(r.year) > 0).map(r => Number(r.year));
+      add('show', s.title, { minYear: years.length ? Math.min(...years) : null, count: s.count });
+    });
+    return { items, pending };
+  }
+
+  function reviewFlags(kind, title, e, sheet) {
+    if (e.source === 'none') return ['No match found'];
+    const info = e.info || {}, f = [];
+    if (!e.image) f.push('No picture');
+    if (info.matchTitle && !similarTitle(title, info.matchTitle)) f.push('Title is different');
+    const yr = Number(info.year);
+    if (kind === 'book') {
+      if (Number(sheet.year) && yr && Math.abs(Number(sheet.year) - yr) > 1) f.push('Year ' + yr + ', yours says ' + sheet.year);
+      if (sheet.author && info.author && !authorsOverlap(sheet.author, info.author)) f.push('Author is different');
+    } else if (kind === 'movie') {
+      if (Number(sheet.year) && yr && Math.abs(Number(sheet.year) - yr) > 1) f.push('Year ' + yr + ', yours says ' + sheet.year);
+      if (Number(sheet.runtime) && Number(info.runtime) && Math.abs(Number(sheet.runtime) - Number(info.runtime)) > 15) f.push('Run time ' + fmtMins(info.runtime) + ', yours says ' + fmtMins(sheet.runtime));
+    } else {
+      if (sheet.minYear && yr && yr > sheet.minYear + 1) f.push('Started ' + yr + ', but you logged ' + sheet.minYear);
+      if (info.aired && sheet.count > info.aired + 2) f.push('Only ' + info.aired + ' episodes aired, you logged ' + sheet.count);
+    }
+    return f;
+  }
+
+  function matchLine(item) {
+    const e = item.e, info = e.info || {};
+    if (e.source === 'none') return e.locked ? 'Skipped, no match' : 'Nothing found';
+    const bits = [info.matchTitle && !similarTitle(item.title, info.matchTitle) ? '"' + info.matchTitle + '"' : '', info.year];
+    if (item.kind === 'book') bits.push(info.author, info.pages ? info.pages + ' pages' : '');
+    if (item.kind === 'movie') bits.push(info.runtime ? fmtMins(info.runtime) : '', info.genre);
+    if (item.kind === 'show') bits.push(info.network, info.aired ? info.aired + ' episodes' : '');
+    return bits.filter(Boolean).join(', ') || 'Matched';
+  }
+
+  function reviewRow(item) {
+    const a = ' data-kind="' + item.kind + '" data-title="' + esc(item.title) + '" data-key="' + esc(item.key) + '"';
+    const actions = item.group === 'done'
+      ? '<button class="btn small" data-act="rvChange"' + a + '>Change</button>'
+      : (item.e.source === 'none' ? '' : '<button class="btn small ok" data-act="rvRight"' + a + '>Looks right</button>') +
+        '<button class="btn small" data-act="rvChange"' + a + '>Change</button>' +
+        '<button class="btn small" data-act="rvNone"' + a + '>No match</button>';
+    return '<div class="rv-row">' + thumb(item.kind, item.title, 'md') +
+      '<div class="rv-main"><div class="rv-title">' + esc(item.title) + '<span class="rv-kind">' + KIND_LABEL[item.kind] + '</span></div>' +
+      '<div class="rv-sub">' + esc(matchLine(item)) + '</div>' +
+      (item.flags.length ? '<div class="rv-flag">' + esc(item.flags.join('. ')) + '</div>' : '') +
+      '<div class="rv-actions">' + actions + '</div></div></div>';
+  }
+
+  function stepsHTML(step) {
+    const names = ['Check', 'Preview', 'Write'];
+    return '<ol class="steps">' + names.map((n, i) => '<li class="' + (i + 1 === step ? 'on' : i + 1 < step ? 'past' : '') + '"><span>' + (i + 1) + '</span>' + n + '</li>').join('') + '</ol>';
+  }
+
+  function reviewHTML() {
+    const R = rv();
+    let h = '<div class="list-head"><button class="back" data-go="#/" aria-label="Back">' + ICONS.back + '</button><h1>Review and fill</h1></div>' + stepsHTML(R.step);
+    if (R.step === 1) h += reviewStep1();
+    else if (R.step === 2) h += reviewStep2();
+    else h += reviewStep3();
+    return h;
+  }
+
+  function reviewStep1() {
+    const R = rv();
+    const { items, pending } = reviewItems();
+    const shown = items.filter(i => R.filter === 'all' || i.kind === R.filter);
+    const groups = { flag: shown.filter(i => i.group === 'flag'), fine: shown.filter(i => i.group === 'fine'), done: shown.filter(i => i.group === 'done') };
+    const seg = [['all', 'All'], ['book', 'Books'], ['movie', 'Movies'], ['show', 'TV']];
+    let h = '<p class="fill-note">Only matches you confirm are used to fill in your sheet. Start with the ones that need a look, then confirm the rest.' +
+      (pending ? ' ' + num(pending) + ' titles are still being matched in the background.' : '') + '</p>';
+    h += '<div class="segmented">' + seg.map(([k, l]) => '<button class="' + (R.filter === k ? 'on' : '') + '" data-act="rvFilter" data-filter="' + k + '">' + l + '</button>').join('') + '</div>';
+
+    const block = (key, title, extra) => {
+      const list = groups[key];
+      let b = '<div class="section-head"><h2>' + title + ' <span class="count">' + num(list.length) + '</span></h2>' + (list.length ? extra || '' : '') + '</div><div class="rows">';
+      if (!list.length) b += '<div class="empty">' + (key === 'flag' ? 'Nothing needs a look.' : key === 'fine' ? 'Nothing left to confirm.' : 'None confirmed yet.') + '</div>';
+      list.slice(0, R.limits[key]).forEach(i => { b += reviewRow(i); });
+      b += '</div>';
+      if (list.length > R.limits[key]) b += '<button class="link-btn" data-act="rvMore" data-group="' + key + '">Show more (' + num(list.length - R.limits[key]) + ')</button>';
+      return b;
+    };
+    h += block('flag', 'Needs a look');
+    h += block('fine', 'Probably right', '<button class="btn small ok" data-act="rvAllFine">Confirm all ' + num(groups.fine.length) + '</button>');
+    h += block('done', 'Confirmed');
+    const confirmed = items.filter(i => i.group === 'done' && i.e.source !== 'none').length;
+    h += '<div class="step-bar"><span>' + num(confirmed) + ' confirmed</span><button class="btn primary" data-act="rvToPreview"' + (confirmed ? '' : ' disabled') + '>Next: preview changes</button></div>';
+    return h;
+  }
+
+  async function buildPreview() {
+    const R = rv();
+    R.busy = 'Working out what can be filled in...';
+    render();
+    const changes = [];
+    const fromEntries = (section, kind, keyName) => records(section).forEach(r => {
+      const e = entryFor(kind, r[keyName]);
+      if (!e || !e.locked || e.source === 'none') return;
+      FILL_FIELDS[section].forEach(([f]) => {
+        const v = (e.info || {})[f];
+        if (blank(r[f]) && !blank(v)) changes.push({ section, row: r._row, check: fingerprint(section, r), field: f, value: v, title: String(r[keyName]).trim() });
       });
+    });
+    fromEntries('books', 'book', 'title');
+    fromEntries('movies', 'movie', 'title');
+    const keys = [...new Set(records('episodes').filter(r => {
+      const e = entryFor('show', r.show);
+      return e && e.locked && e.source === 'tvmaze' && (blank(r.runtime) || blank(r.year));
+    }).map(r => norm(r.show)))];
+    try {
+      for (let i = 0; i < keys.length; i += 8) {
+        R.busy = 'Checking TV episodes, show ' + (i + 1) + ' of ' + keys.length + '...';
+        render();
+        const j = await api('previewEpisodes', { shows: keys.slice(i, i + 8), fields: ['runtime', 'year'] });
+        j.changes.forEach(c => changes.push(Object.assign({ section: 'episodes' }, c)));
+      }
+    } catch (e) {
+      toast(e.message, true);
+    }
+    // group by title for display
+    const groups = new Map();
+    changes.forEach(c => {
+      const k = c.section + '|' + norm(c.title);
+      if (!groups.has(k)) groups.set(k, { id: k, section: c.section, title: c.title, changes: [] });
+      groups.get(k).changes.push(c);
+    });
+    R.preview = [...groups.values()];
+    R.busy = '';
+    render();
+  }
+
+  function activeChanges() {
+    const R = rv();
+    const out = [];
+    (R.preview || []).forEach(g => {
+      if (R.off.has(g.id)) return;
+      g.changes.forEach(c => { if (!R.fieldsOff.has(c.section + '.' + c.field)) out.push(c); });
+    });
+    return out;
+  }
+
+  function changeSummary(g) {
+    const R = rv();
+    const live = g.changes.filter(c => !R.fieldsOff.has(c.section + '.' + c.field));
+    if (g.section === 'episodes') {
+      const rt = live.filter(c => c.field === 'runtime').length, yr = live.filter(c => c.field === 'year').length;
+      return [rt ? rt + ' run time' + (rt === 1 ? '' : 's') : '', yr ? yr + ' year' + (yr === 1 ? '' : 's') : ''].filter(Boolean).join(', ') || 'Nothing selected';
+    }
+    const label = f => (FILL_FIELDS[g.section].find(x => x[0] === f) || [f, f])[1];
+    return live.map(c => label(c.field) + ' ' + (c.field === 'runtime' ? fmtMins(c.value) : c.value)).join(', ') || 'Nothing selected';
+  }
+
+  function reviewStep2() {
+    const R = rv();
+    if (R.busy) return '<p class="lookup-msg">' + esc(R.busy) + '</p>';
+    if (!R.preview) { setTimeout(buildPreview, 0); return '<p class="lookup-msg">Working out what can be filled in...</p>'; }
+    const total = activeChanges().length;
+    const names = { books: 'Books', movies: 'Movies', episodes: 'TV episodes' };
+    let h = '<p class="fill-note">Here is everything that will be written. Only empty cells are filled. Untick anything you don\'t want.</p>';
+    ['books', 'movies', 'episodes'].forEach(section => {
+      const gs = R.preview.filter(g => g.section === section);
+      if (!gs.length) return;
+      const fieldToggles = FILL_FIELDS[section].filter(([f]) => gs.some(g => g.changes.some(c => c.field === f)))
+        .map(([f, l]) => '<label class="pill-check"><input type="checkbox" data-act="rvField" data-field="' + section + '.' + f + '"' + (R.fieldsOff.has(section + '.' + f) ? '' : ' checked') + '>' + l + '</label>').join('');
+      h += '<div class="section-head"><h2>' + names[section] + ' <span class="count">' + num(gs.length) + '</span></h2></div>';
+      h += '<div class="field-toggles">' + fieldToggles + '</div><div class="rows">';
+      gs.forEach(g => {
+        const kind = SEC[section].kind;
+        h += '<label class="pv-row"><input type="checkbox" data-act="rvTitle" data-id="' + esc(g.id) + '"' + (R.off.has(g.id) ? '' : ' checked') + '>' +
+          thumb(kind, g.title, 'xs') + '<span class="pv-main"><span class="pv-title">' + esc(g.title) + '</span><span class="pv-sub">' + esc(changeSummary(g)) + '</span></span></label>';
+      });
+      h += '</div>';
+    });
+    if (!R.preview.length) h += '<div class="empty">Nothing to fill in. Your confirmed matches have no empty cells to fill, or you haven\'t confirmed any yet.</div>';
+    h += '<div class="step-bar"><button class="btn" data-act="rvBack">Back</button><button class="btn primary" data-act="rvWrite"' + (total ? '' : ' disabled') + '>Write ' + num(total) + ' cells</button></div>';
+    return h;
+  }
+
+  function reviewStep3() {
+    const R = rv();
+    if (R.busy) return '<p class="lookup-msg">' + esc(R.busy) + '</p>';
+    const res = R.result || { filled: 0, skipped: 0 };
+    return '<div class="done-box"><h2>Filled in ' + num(res.filled) + ' cells</h2>' +
+      (res.skipped ? '<p class="fill-note">' + num(res.skipped) + ' were skipped because the cell was no longer empty or the row had moved.</p>' : '') +
+      '<div class="form-actions plain"><button class="btn primary" data-go="#/">Back to dashboard</button><button class="btn" data-act="rvRestart">Review again</button></div></div>';
+  }
+
+  async function writeFill() {
+    const R = rv();
+    const changes = activeChanges();
+    R.step = 3;
+    R.result = { filled: 0, skipped: 0 };
+    try {
+      for (const section of ['books', 'movies', 'episodes']) {
+        const list = changes.filter(c => c.section === section).map(c => ({ row: c.row, check: c.check, field: c.field, value: c.value }));
+        for (let i = 0; i < list.length; i += 300) {
+          R.busy = 'Writing to your sheet... ' + num(R.result.filled) + ' of ' + num(changes.length);
+          render();
+          const j = await api('applyFill', { section, changes: list.slice(i, i + 300) });
+          R.result.filled += j.result.filled;
+          R.result.skipped += j.result.skipped;
+        }
+      }
+      R.busy = '';
+      render();
+      sync(true);
+    } catch (e) {
+      R.busy = '';
+      R.step = 2;
+      toast(e.message + (R.result.filled ? ' (' + num(R.result.filled) + ' cells were written before this.)' : ''), true);
+      render();
+    }
+  }
+
+  async function reviewAction(act, el) {
+    const R = rv();
+    const d = el.dataset;
+    try {
+      if (act === 'rvRight') { el.disabled = true; saveEntries((await api('confirmMatches', { keys: [d.key] })).entries); }
+      else if (act === 'rvNone') { el.disabled = true; saveEntries([(await api('rejectMatch', { kind: d.kind, title: d.title })).entry]); }
+      else if (act === 'rvChange') { openRematch(d.kind, d.title, () => { closeModal(); render(); }); return; }
+      else if (act === 'rvAllFine') {
+        el.disabled = true;
+        const keys = reviewItems().items.filter(i => i.group === 'fine' && (R.filter === 'all' || i.kind === R.filter)).map(i => i.key);
+        for (let i = 0; i < keys.length; i += 200) {
+          el.textContent = 'Confirming ' + Math.min(i + 200, keys.length) + ' of ' + keys.length;
+          saveEntries((await api('confirmMatches', { keys: keys.slice(i, i + 200) })).entries);
+        }
+      }
+    } catch (e) { toast(e.message, true); }
+    render();
   }
 
   // ---------- Show details ----------
@@ -1295,8 +1502,12 @@
       '<div class="form-media" id="form-media">' + formMediaHTML(section, values[keyName]) + '</div>' +
       '<div class="form-grid">' + fields.map(f => fieldHTML(f, values[f.k])).join('') + '</div>' +
       '<div class="form-error" id="form-error" hidden></div></div>' +
-      '<div class="form-actions"><button type="button" class="btn" data-act="close">Cancel</button>' +
-      '<button type="submit" class="btn primary" id="save-btn">' + (isAdd ? ADD_LABELS[section] : 'Save changes') + '</button></div></form>',
+      '<div class="form-actions" id="form-actions">' + (isAdd ? '' : '<button type="button" class="btn danger-text" id="del-btn">Delete</button><span class="spacer"></span>') +
+      '<button type="button" class="btn" data-act="close">Cancel</button>' +
+      '<button type="submit" class="btn primary" id="save-btn">' + (isAdd ? ADD_LABELS[section] : 'Save changes') + '</button></div>' +
+      (isAdd ? '' : '<div class="form-actions confirm-bar" id="confirm-bar" hidden><span class="confirm-text">Delete this ' + TITLES[section] + ' from your sheet?</span>' +
+        '<button type="button" class="btn" id="keep-btn">Keep it</button><button type="button" class="btn danger" id="really-del">Delete</button></div>') +
+      '</form>',
       sheet => {
         const form = sheet.querySelector('#rec-form');
         const dirty = new Set();
@@ -1321,6 +1532,12 @@
         const findBtn = form.querySelector('[data-act=lookup]');
         if (findBtn) findBtn.addEventListener('click', ev => { ev.stopPropagation(); startLookup(section, form, sheet); });
         form.addEventListener('submit', e => { e.preventDefault(); submitForm(section, rec, fields, form); });
+        if (!isAdd) {
+          const bar = sheet.querySelector('#form-actions'), confirmBar = sheet.querySelector('#confirm-bar');
+          sheet.querySelector('#del-btn').addEventListener('click', () => { bar.hidden = true; confirmBar.hidden = false; });
+          sheet.querySelector('#keep-btn').addEventListener('click', () => { confirmBar.hidden = true; bar.hidden = false; });
+          sheet.querySelector('#really-del').addEventListener('click', ev => deleteRecord(section, rec, ev.currentTarget, form));
+        }
         if (isAdd) {
           const first = form.querySelector('input[type=text]');
           if (first && !first.value) first.focus();
@@ -1434,7 +1651,7 @@
         state.data[section].push(j.record);
         toast(ADDED_TOASTS[section]);
       } else {
-        const j = await api('update', { section, row: rec._row, check: rec[SEC[section].key], record: changes });
+        const j = await api('update', { section, row: rec._row, check: fingerprint(section, rec), record: changes });
         const i = state.data[section].findIndex(r => r._row === rec._row);
         if (i >= 0) state.data[section][i] = j.record;
         toast('Changes saved');
@@ -1450,11 +1667,32 @@
     }
   }
 
+  async function deleteRecord(section, rec, btn, form) {
+    btn.disabled = true;
+    btn.textContent = 'Deleting';
+    try {
+      await api('delete', { section, row: rec._row, check: fingerprint(section, rec) });
+      // rows below move up one in the sheet, so keep the app's row numbers in step
+      state.data[section] = state.data[section].filter(r => r._row !== rec._row).map(r => (r._row > rec._row ? Object.assign(r, { _row: r._row - 1 }) : r));
+      state.showsCache = null;
+      persist();
+      closeModal();
+      render();
+      toast('Deleted');
+    } catch (e) {
+      const errEl = form.querySelector('#form-error');
+      errEl.textContent = e.message;
+      errEl.hidden = false;
+      btn.disabled = false;
+      btn.textContent = 'Delete';
+    }
+  }
+
   async function finishBook(row) {
     const rec = records('books').find(r => r._row === row);
     if (!rec) return;
     try {
-      const j = await api('update', { section: 'books', row, check: rec.title, record: { finished: todayISO() } });
+      const j = await api('update', { section: 'books', row, check: fingerprint('books', rec), record: { finished: todayISO() } });
       const i = state.data.books.findIndex(r => r._row === row);
       if (i >= 0) state.data.books[i] = j.record;
       persist();
@@ -1476,32 +1714,40 @@
   const UNITS = { books: ['book', 'books'], episodes: ['episode', 'episodes'], movies: ['movie', 'movies'], drinks: ['drink', 'drinks'] };
   const unit = (type, n) => dec(n) + ' ' + UNITS[type][n === 1 ? 0 : 1];
 
+  function bookDays(r) {
+    if (Number(r.days) > 0) return Number(r.days);
+    const d = daysBetween(r.started, r.finished);
+    return d != null && d >= 0 ? d : null;
+  }
+
   function periodItems(inPeriod, types) {
-    const lines = [], totals = {};
+    const lines = [], totals = {}, mins = {};
     if (types.includes('books')) {
       const list = records('books').filter(r => inPeriod(r.finished));
       totals.books = list.length;
-      list.forEach(r => lines.push({ c: 'books', t: r.title, s: 'Finished' }));
+      list.forEach(r => { const d = bookDays(r); lines.push({ c: 'books', t: r.title, s: d == null ? '' : d + (d === 1 ? ' day' : ' days') }); });
     }
     if (types.includes('episodes')) {
       const list = records('episodes').filter(r => inPeriod(r.date));
       totals.episodes = list.length;
+      mins.episodes = list.reduce((s, r) => s + epMinutes(r), 0);
       const byShow = new Map();
-      list.forEach(r => { const k = norm(r.show); const g = byShow.get(k) || { t: String(r.show).trim(), eps: [] }; g.eps.push(r); byShow.set(k, g); });
-      [...byShow.values()].sort((a, b) => b.eps.length - a.eps.length)
-        .forEach(g => lines.push({ c: 'tv', t: g.t, s: g.eps.length > 2 ? g.eps.length + ' episodes' : epLabel(g.eps) }));
+      list.forEach(r => { const k = norm(r.show); const g = byShow.get(k) || { t: String(r.show).trim(), n: 0 }; g.n++; byShow.set(k, g); });
+      [...byShow.values()].sort((a, b) => b.n - a.n)
+        .forEach(g => lines.push({ c: 'tv', t: g.t, s: unit('episodes', g.n) }));
     }
     if (types.includes('movies')) {
       const list = records('movies').filter(r => inPeriod(r.date));
       totals.movies = list.length;
-      list.forEach(r => lines.push({ c: 'movies', t: r.title, s: r.channel || 'Movie' }));
+      mins.movies = list.reduce((s, r) => s + movieMinutes(r), 0);
+      list.forEach(r => lines.push({ c: 'movies', t: r.title, s: '' }));
     }
     if (types.includes('drinks')) {
       const list = sortedDesc('drinks', records('drinks').filter(r => inPeriod(r.date))).reverse();
       totals.drinks = list.reduce((s, r) => s + (Number(r.drinks) || 0), 0);
       list.forEach(r => lines.push({ c: 'drinks', t: r.reason || 'Drinks', s: fmtDate(r.date) + ', ' + unit('drinks', Number(r.drinks) || 0) }));
     }
-    return { lines, totals };
+    return { lines, totals, mins };
   }
 
   function tipHTML(spec) {
@@ -1518,8 +1764,9 @@
       types = ['books', 'episodes', 'movies'];
       inPeriod = x => x === a;
     }
-    const { lines, totals } = periodItems(inPeriod, types);
-    const sum = types.filter(t => totals[t]).map(t => unit(t, totals[t])).join(', ') || 'Nothing logged';
+    const { lines, totals, mins } = periodItems(inPeriod, types);
+    let sum = types.filter(t => totals[t]).map(t => unit(t, totals[t])).join(', ') || 'Nothing logged';
+    if (kind === 'm' && mins[a] > 0) sum += ', ' + fmtMins(mins[a]) + ' watched';
     const shown = lines.slice(0, 8);
     return '<div class="tip-head">' + esc(head) + '</div><div class="tip-sum">' + esc(sum) + '</div>' +
       (shown.length ? '<ul>' + shown.map(l => '<li><span class="dot ' + l.c + '"></span><span class="tip-t">' + esc(l.t) + '</span><span class="tip-s">' + esc(l.s) + '</span></li>').join('') + '</ul>' : '') +
@@ -1575,7 +1822,19 @@
   const ACTIONS = {
     sync: () => sync(),
     syncNow: () => { closeModal(); sync(); },
-    openFill: () => openFill(),
+    rvRight: el => reviewAction('rvRight', el),
+    rvNone: el => reviewAction('rvNone', el),
+    rvChange: el => reviewAction('rvChange', el),
+    rvAllFine: el => reviewAction('rvAllFine', el),
+    rvFilter: el => { rv().filter = el.dataset.filter; render(); },
+    rvMore: el => { rv().limits[el.dataset.group] += 100; render(); },
+    rvToPreview: () => { const R = rv(); R.step = 2; R.preview = null; R.off = new Set(); window.scrollTo(0, 0); render(); },
+    rvBack: () => { rv().step = 1; window.scrollTo(0, 0); render(); },
+    rvWrite: () => { window.scrollTo(0, 0); writeFill(); },
+    rvRestart: () => { state.review = null; render(); },
+    rvField: el => { const R = rv(); if (el.checked) R.fieldsOff.delete(el.dataset.field); else R.fieldsOff.add(el.dataset.field); render(); },
+    rvTitle: el => { const R = rv(); if (el.checked) R.off.delete(el.dataset.id); else R.off.add(el.dataset.id); render(); },
+    openReview: () => { modalOpen = false; $modal.innerHTML = ''; state.review = null; location.replace('#/review'); },
     settings: () => openSettings(),
     close: () => closeModal(),
     add: () => {

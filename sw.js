@@ -1,6 +1,6 @@
 // Keeps the app loading fast and working offline with your last synced data.
 // Only the app files are cached here. Your sheet data lives in the app's own storage.
-const CACHE = 'media-tracker-v4';
+const CACHE = 'media-tracker-v6';
 const IMAGES = 'media-tracker-images'; // covers and posters, kept across app updates
 const IMAGE_HOSTS = ['covers.openlibrary.org', 'image.tmdb.org', 'static.tvmaze.com'];
 const SHELL = [
