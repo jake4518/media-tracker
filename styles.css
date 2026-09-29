@@ -257,7 +257,11 @@ input[type="date"] { color-scheme: dark; min-height: 44px; }
 .mrow + .mrow { margin-top: 10px; }
 .mlabel { font-size: 13px; color: var(--muted); padding-bottom: 1px; }
 .bars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; height: 34px; align-items: end; }
-.bar { display: block; height: var(--h); min-height: 2px; border-radius: 3px 3px 1px 1px; opacity: 0.55; }
+.bcol { display: flex; align-items: flex-end; height: 100%; cursor: pointer; border-radius: 3px; }
+.bcol:not([data-tip]) { cursor: default; }
+.bar { display: block; width: 100%; height: var(--h); min-height: 2px; border-radius: 3px 3px 1px 1px; opacity: 0.55; }
+.bcol[data-tip]:hover .bar, .bcol.tip-on .bar { opacity: 1; }
+.bcol.tip-on { background: rgba(255, 255, 255, 0.05); }
 .bar.now { opacity: 1; }
 .bar.future { background: var(--line) !important; opacity: 0.5; height: 2px; }
 .bar.books { background: var(--c-books); }
@@ -276,6 +280,8 @@ input[type="date"] { color-scheme: dark; min-height: 44px; }
 .heat rect.l2 { fill: var(--accent); fill-opacity: 0.5; }
 .heat rect.l3 { fill: var(--accent); fill-opacity: 0.75; }
 .heat rect.l4 { fill: var(--accent); }
+.heat rect[data-tip] { cursor: pointer; }
+.heat rect:hover, .heat rect.tip-on { stroke: var(--text); stroke-width: 1.5; }
 .chart-note { margin: 10px 0 0; font-size: 13px; color: var(--faint); }
 
 /* ---------- recent activity ---------- */
@@ -348,3 +354,46 @@ input[type="date"] { color-scheme: dark; min-height: 44px; }
 .ac-item:hover { background: var(--panel); }
 
 .setup-note { font-size: 13px; color: var(--faint); margin: 12px 0 0 !important; }
+
+/* ============ v2.1 ============ */
+
+/* ---------- section stats ---------- */
+.stat-groups { display: grid; gap: 16px; }
+.stat-group h3 { font: 600 15px/1.2 var(--display); color: var(--muted); margin: 0 0 8px; }
+.statgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (min-width: 640px) { .statgrid { grid-template-columns: repeat(4, 1fr); } }
+.stat { display: flex; flex-direction: column; gap: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.stat-num { font: 700 28px/1 var(--display); letter-spacing: -0.01em; }
+.stat-num.text { font-size: 19px; line-height: 28px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stat-label { font-size: 13px; color: var(--muted); }
+
+/* ---------- chart details box ---------- */
+#tip {
+  position: fixed; z-index: 70; width: max-content; max-width: min(300px, calc(100vw - 16px));
+  background: var(--panel-2); border: 1px solid #2d3640; border-radius: 10px;
+  padding: 10px 12px; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5); pointer-events: none;
+}
+.tip-head { font: 600 15px/1.2 var(--display); }
+.tip-sum { color: var(--muted); font-size: 13px; margin-top: 2px; }
+#tip ul { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); display: grid; gap: 5px; }
+#tip li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13.5px; }
+.tip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tip-s { color: var(--faint); font-size: 12.5px; white-space: nowrap; }
+.tip-more { color: var(--faint); font-size: 12.5px; margin-top: 6px; }
+
+/* ---------- one-show episode list ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px;
+  padding: 4px 4px 4px 12px; font-size: 14px; font-weight: 500;
+}
+.chip button { background: none; border: 0; color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 8px; }
+
+/* ---------- fill in missing info ---------- */
+.fill-note { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
+.fill-group { border-top: 1px solid var(--line); padding: 12px 0 4px; }
+.fill-group h3 { font: 600 16px/1.2 var(--display); margin: 0 0 6px; }
+.fill-none { color: var(--faint); font-size: 14px; margin: 0 0 8px; }
+.check { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 15px; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.check-n { margin-left: auto; color: var(--muted); font-size: 14px; }

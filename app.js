@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.0.0';
+  const VERSION = '2.1.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -336,6 +336,8 @@
   function route() {
     const path = location.hash.replace(/^#\/?/, '');
     if (LISTS[path]) return Object.assign({ path, list: true }, LISTS[path]);
+    const m = /^tv\/episodes\/(.+)$/.exec(path);
+    if (m) return Object.assign({ path, list: true, show: decodeURIComponent(m[1]) }, LISTS['tv/episodes']);
     const tab = TABS.some(t => t.id === path) ? path : 'dashboard';
     return { path, tab, list: false };
   }
@@ -352,6 +354,7 @@
     if (!config || state.needsAuth) { renderSetup(); return; }
     const r = route();
     const focus = captureFocus();
+    hideTip();
     $app.innerHTML = headerHTML(r) + '<main class="page' + (r.list ? ' wide' : '') + '">' + pageHTML(r) + '</main>';
     restoreFocus(focus);
     bindPage(r);
@@ -448,10 +451,10 @@
   function monthlyHTML() {
     const y = thisYear(), curMonth = new Date().getMonth();
     const rows = [
-      { label: 'Books', color: 'books', vals: bucketMonths(records('books'), r => r.finished, () => 1, y) },
-      { label: 'Episodes', color: 'tv', vals: bucketMonths(records('episodes'), r => r.date, () => 1, y) },
-      { label: 'Movies', color: 'movies', vals: bucketMonths(records('movies'), r => r.date, () => 1, y) },
-      { label: 'Drinks', color: 'drinks', vals: bucketMonths(records('drinks'), r => r.date, r => Number(r.drinks) || 0, y) },
+      { label: 'Books', key: 'books', color: 'books', vals: bucketMonths(records('books'), r => r.finished, () => 1, y) },
+      { label: 'Episodes', key: 'episodes', color: 'tv', vals: bucketMonths(records('episodes'), r => r.date, () => 1, y) },
+      { label: 'Movies', key: 'movies', color: 'movies', vals: bucketMonths(records('movies'), r => r.date, () => 1, y) },
+      { label: 'Drinks', key: 'drinks', color: 'drinks', vals: bucketMonths(records('drinks'), r => r.date, r => Number(r.drinks) || 0, y) },
     ];
     let h = '<div class="chart months">';
     rows.forEach(row => {
@@ -460,7 +463,8 @@
         row.vals.map((v, i) => {
           const future = i > curMonth;
           const pct = future ? 0 : Math.max(v ? 8 : 0, Math.round((v / max) * 100));
-          return '<span class="bar ' + row.color + (future ? ' future' : '') + (i === curMonth ? ' now' : '') + '" style="--h:' + pct + '%" title="' + MONTHS[i] + ': ' + dec(v) + '"></span>';
+          const bar = '<span class="bar ' + row.color + (future ? ' future' : '') + (i === curMonth ? ' now' : '') + '" style="--h:' + pct + '%"></span>';
+          return future ? '<span class="bcol">' + bar + '</span>' : '<span class="bcol" data-tip="m:' + row.key + ':' + i + '">' + bar + '</span>';
         }).join('') + '</div></div>';
     });
     h += '<div class="mrow axis"><span class="mlabel"></span><div class="bars">' + MONTHS.map(m => '<span>' + m.charAt(0) + '</span>').join('') + '</div></div></div>';
@@ -492,7 +496,7 @@
         const n = counts.get(iso) || 0;
         if (n) active++;
         const lvl = n === 0 ? 0 : n === 1 ? 1 : n <= 3 ? 2 : n <= 5 ? 3 : 4;
-        rects += '<rect x="' + (w * C) + '" y="' + (16 + d * C) + '" width="' + S + '" height="' + S + '" rx="2" class="l' + lvl + '"><title>' + fmtDate(iso) + ': ' + n + '</title></rect>';
+        rects += '<rect x="' + (w * C) + '" y="' + (16 + d * C) + '" width="' + S + '" height="' + S + '" rx="2" class="l' + lvl + '" data-tip="d:' + iso + '"></rect>';
         if (d === 0) {
           const m = parseISO(addDays(iso, 6)).getMonth();
           if (m !== lastMonth && w < weeks - 2) { labels += '<text x="' + (w * C) + '" y="10">' + MONTHS[m] + '</text>'; lastMonth = m; }
@@ -556,18 +560,56 @@
       sectionHead('Recent activity') + list;
   }
 
+  // ---------- Section stats: this year and all time ----------
+  function statsHTML(yearCells, allCells) {
+    const cell = c => '<div class="stat"><span class="stat-num' + (c.text ? ' text' : '') + '">' + esc(c.v) + '</span><span class="stat-label">' + esc(c.l) + '</span></div>';
+    return '<div class="stat-groups">' +
+      '<div class="stat-group"><h3>This year</h3><div class="statgrid">' + yearCells.map(cell).join('') + '</div></div>' +
+      '<div class="stat-group"><h3>All time</h3><div class="statgrid">' + allCells.map(cell).join('') + '</div></div></div>';
+  }
+  const inYear = d => (d || '').startsWith(thisYear());
+  const hoursText = m => num(Math.round(m / 60));
+  function topValue(vals) {
+    const m = new Map();
+    vals.forEach(v => { const s = String(v || '').trim(); if (s) m.set(s, (m.get(s) || 0) + 1); });
+    let best = '', n = 0;
+    m.forEach((c, k) => { if (c > n) { best = k; n = c; } });
+    return best || '-';
+  }
+  function monthsSince(first) {
+    const d = daysBetween(first, todayISO());
+    return d == null ? 1 : Math.max(1, (d + 1) / 30.44);
+  }
+  // Run time from your sheet, or from the matched info when the sheet is blank
+  function epMinutes(r) {
+    if (Number(r.runtime) > 0) return Number(r.runtime);
+    const e = entryFor('show', r.show);
+    return e && Number((e.info || {}).runtime) > 0 ? Number(e.info.runtime) : 0;
+  }
+  function movieMinutes(r) {
+    if (Number(r.runtime) > 0) return Number(r.runtime);
+    const e = entryFor('movie', r.title);
+    return e && Number((e.info || {}).runtime) > 0 ? Number(e.info.runtime) : 0;
+  }
+
   // ---------- Books ----------
+  function bookCells(list) {
+    const days = list.map(r => Number(r.days)).filter(n => n > 0);
+    return [
+      { v: num(list.length), l: 'Books finished' },
+      { v: num(list.reduce((s, r) => s + (Number(r.pages) || 0), 0)), l: 'Pages read' },
+      { v: days.length ? Math.round(days.reduce((a, b) => a + b, 0) / days.length) : '-', l: 'Days per book' },
+      { v: hoursText(list.reduce((s, r) => s + (Number(r.time) || 0), 0)), l: 'Hours listened' },
+    ];
+  }
+
   function booksHTML() {
-    const y = thisYear(), all = records('books');
+    const all = records('books');
     const finished = all.filter(r => r.finished);
-    const finishedYr = finished.filter(r => r.finished.startsWith(y));
-    const daysList = (finishedYr.length ? finishedYr : finished).map(r => Number(r.days)).filter(n => n > 0);
-    const avg = daysList.length ? Math.round(daysList.reduce((a, b) => a + b, 0) / daysList.length) : null;
     const reading = sortedDesc('books', all.filter(r => r.started && !r.finished));
     const today = todayISO();
 
-    let h = '<p class="summary"><b>' + num(finishedYr.length) + '</b> books finished this year, <b>' + num(finished.length) + '</b> all time.' +
-      (avg ? ' About <b>' + avg + '</b> days per book' + (finishedYr.length ? ' this year.' : '.') : '') + '</p>';
+    let h = statsHTML(bookCells(finished.filter(r => inYear(r.finished))), bookCells(finished));
 
     h += sectionHead('Currently reading');
     h += '<div class="rows">';
@@ -592,18 +634,21 @@
   }
 
   // ---------- TV ----------
+  function tvCells(eps, shows) {
+    return [
+      { v: num(eps.length), l: 'Episodes' },
+      { v: num(new Set(eps.map(r => norm(r.show))).size), l: 'Shows' },
+      { v: hoursText(eps.reduce((s, r) => s + epMinutes(r), 0)), l: 'Hours watched' },
+      { v: num(shows.filter(s => s.status === 'finished').length), l: 'Shows finished' },
+    ];
+  }
+
   function tvHTML() {
-    const y = thisYear(), eps = records('episodes');
-    const epsYr = eps.filter(r => (r.date || '').startsWith(y));
-    const showsYr = new Set(epsYr.map(r => norm(r.show))).size;
-    const minsYr = epsYr.reduce((s, r) => s + (Number(r.runtime) || 0), 0);
+    const eps = records('episodes');
     const shows = sortedDesc('shows');
     const watching = shows.filter(s => s.status === 'watching');
-    const finishedYr = shows.filter(s => s.status === 'finished' && s.last.startsWith(y)).length;
 
-    let h = '<p class="summary"><b>' + num(epsYr.length) + '</b> episodes this year across <b>' + num(showsYr) + '</b> shows' +
-      (finishedYr ? ', <b>' + finishedYr + '</b> finished' : '') +
-      (minsYr >= 60 ? '. <b>' + num(Math.round(minsYr / 60)) + '</b> hours of logged run time.' : '.') + '</p>';
+    let h = statsHTML(tvCells(eps.filter(r => inYear(r.date)), shows.filter(s => inYear(s.last))), tvCells(eps, shows));
 
     h += sectionHead('Watching now');
     h += '<div class="rows">';
@@ -633,12 +678,19 @@
   }
 
   // ---------- Movies ----------
+  function movieCells(list, months) {
+    return [
+      { v: num(list.length), l: 'Movies' },
+      { v: hoursText(list.reduce((s, r) => s + movieMinutes(r), 0)), l: 'Hours watched' },
+      { v: (list.length / months).toFixed(1), l: 'Per month' },
+      { v: topValue(list.map(r => r.channel)), l: 'Watched most on', text: true },
+    ];
+  }
+
   function moviesHTML() {
-    const y = thisYear(), all = records('movies');
-    const yr = all.filter(r => (r.date || '').startsWith(y));
-    const mins = yr.reduce((s, r) => s + (Number(r.runtime) || 0), 0);
-    let h = '<p class="summary"><b>' + num(yr.length) + '</b> movies this year, <b>' + num(all.length) + '</b> all time.' +
-      (mins >= 60 ? ' <b>' + num(Math.round(mins / 60)) + '</b> hours of logged run time this year.' : '') + '</p>';
+    const all = records('movies');
+    const dated = all.map(r => r.date).filter(Boolean).sort();
+    let h = statsHTML(movieCells(all.filter(r => inYear(r.date)), monthsSince(thisYear() + '-01-01')), movieCells(all, monthsSince(dated[0])));
     h += sectionHead('Recently watched');
     h += rowsHTML('movies', sortedDesc('movies').slice(0, RECENT_ROWS), [
       { label: '', w: '24px', html: r => thumb('movie', r.title, 'xs') },
@@ -651,14 +703,24 @@
   }
 
   // ---------- Drinking ----------
+  function drinkCells(list, days) {
+    const total = list.reduce((s, r) => s + (Number(r.drinks) || 0), 0);
+    const biggest = list.reduce((m, r) => Math.max(m, Number(r.drinks) || 0), 0);
+    return [
+      { v: dec(total), l: 'Drinks' },
+      { v: (total / Math.max(1, days / 7)).toFixed(1), l: 'Per week' },
+      { v: num(list.length), l: 'Nights' },
+      { v: dec(biggest), l: 'Biggest night' },
+    ];
+  }
+
   function drinksHTML() {
-    const y = thisYear(), m = thisMonth(), all = records('drinks');
-    const sum = list => list.reduce((s, r) => s + (Number(r.drinks) || 0), 0);
-    const yrSum = sum(all.filter(r => (r.date || '').startsWith(y)));
-    const monthSum = sum(all.filter(r => (r.date || '').startsWith(m)));
-    const dayOfYear = (daysBetween(y + '-01-01', todayISO()) || 0) + 1;
-    const perWeek = yrSum / (dayOfYear / 7);
-    let h = '<p class="summary"><b>' + dec(yrSum) + '</b> drinks this year, about <b>' + perWeek.toFixed(1) + '</b> a week. <b>' + dec(monthSum) + '</b> so far this month.</p>';
+    const all = records('drinks');
+    const dated = all.map(r => r.date).filter(Boolean).sort();
+    const today = todayISO();
+    const yearDays = (daysBetween(thisYear() + '-01-01', today) || 0) + 1;
+    const allDays = dated.length ? (daysBetween(dated[0], today) || 0) + 1 : 1;
+    let h = statsHTML(drinkCells(all.filter(r => inYear(r.date)), yearDays), drinkCells(all, allDays));
     h += sectionHead('Recent');
     h += rowsHTML('drinks', sortedDesc('drinks').slice(0, RECENT_ROWS), [
       { k: 'date', label: 'Date', w: '64px', fmt: fmtDate, cls: 'muted' },
@@ -724,9 +786,10 @@
     return state.lists[section];
   }
 
-  function filteredList(section) {
+  function filteredList(section, show) {
     const ls = listState(section);
     let list = records(section);
+    if (show) list = list.filter(r => norm(r.show) === show);
     const terms = ls.q.toLowerCase().split(/\s+/).filter(Boolean);
     if (terms.length) {
       list = list.filter(r => {
@@ -744,8 +807,9 @@
 
   function listPageHTML(r) {
     const section = r.section, ls = listState(section);
-    const list = filteredList(section);
+    const list = filteredList(section, r.show);
     const cols = ALL_COLS[section];
+    const onlyShow = r.show ? showList().find(s => s.key === r.show) : null;
     const minW = cols.reduce((s, c) => s + (parseInt(c.w.replace(/^minmax\(/, ''), 10) || 0) + 12, 12);
     const parent = TABS.find(t => t.id === r.tab).href;
 
@@ -758,7 +822,8 @@
       '<select id="list-sort" aria-label="Sort">' +
       [['new', 'Newest first'], ['old', 'Oldest first'], ['az', 'A to Z']].map(o => '<option value="' + o[0] + '"' + (ls.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
       '</select></div>';
-    h += '<p class="result-count">' + (ls.q ? num(list.length) + ' of ' + num(records(section).length) : num(list.length)) + ' ' + (list.length === 1 ? 'row' : 'rows') + '</p>';
+    if (r.show) h += '<div class="chip">Only ' + esc(onlyShow ? onlyShow.title : r.show) + '<button data-go="#/tv/episodes" aria-label="Show all episodes">&times;</button></div>';
+    h += '<p class="result-count">' + num(list.length) + ' ' + (list.length === 1 ? 'row' : 'rows') + '</p>';
     h += '<div class="table-wrap" style="--min-w:' + minW + 'px">' + rowsHTML(section, list.slice(0, ls.limit), cols, {
       empty: ls.q ? 'No matches.' : 'Nothing here yet.',
       editOf: section === 'shows' ? s => 'show:' + s.key : null,
@@ -878,9 +943,93 @@
       (state.fetchedAt ? ' Last updated ' + ago(state.fetchedAt) + '.' : '') +
       ' <b>' + num(matched) + '</b> titles have pictures so far.</p>' +
       '<div class="form-actions plain">' +
+      '<button class="btn" data-act="openFill">Fill in missing info</button>' +
       '<button class="btn" data-act="syncNow">Refresh from sheet</button>' +
       '<button class="btn" data-act="disconnect">Disconnect this device</button></div>' +
       '<p class="result-count" style="margin-top:18px">Version ' + VERSION + '</p>');
+  }
+
+
+  // ---------- Fill in missing info ----------
+  const FILL_FIELDS = {
+    books: [['author', 'Author'], ['year', 'Year published'], ['pages', 'Pages'], ['genre', 'Genre']],
+    movies: [['runtime', 'Run time'], ['year', 'Release year'], ['genre', 'Genre']],
+    episodes: [['runtime', 'Run time'], ['year', 'Year']],
+  };
+
+  function missingCounts() {
+    const c = { books: {}, movies: {}, episodes: {}, showKeys: new Set() };
+    Object.keys(FILL_FIELDS).forEach(s => FILL_FIELDS[s].forEach(([f]) => { c[s][f] = 0; }));
+    const fromEntry = (section, kind, keyName) => records(section).forEach(r => {
+      const e = entryFor(kind, r[keyName]);
+      if (!e || e.source === 'none') return;
+      FILL_FIELDS[section].forEach(([f]) => { if (blank(r[f]) && !blank((e.info || {})[f])) c[section][f]++; });
+    });
+    fromEntry('books', 'book', 'title');
+    fromEntry('movies', 'movie', 'title');
+    records('episodes').forEach(r => {
+      const e = entryFor('show', r.show);
+      if (!e || e.source !== 'tvmaze') return;
+      if (blank(r.runtime)) { c.episodes.runtime++; c.showKeys.add(norm(r.show)); }
+      if (blank(r.year)) { c.episodes.year++; c.showKeys.add(norm(r.show)); }
+    });
+    return c;
+  }
+
+  function openFill() {
+    const c = missingCounts();
+    const group = (section, title, upTo) => {
+      const opts = FILL_FIELDS[section].filter(([f]) => c[section][f] > 0);
+      if (!opts.length) return '<div class="fill-group"><h3>' + title + '</h3><p class="fill-none">Nothing to fill in.</p></div>';
+      return '<div class="fill-group"><h3>' + title + '</h3>' + opts.map(([f, label]) =>
+        '<label class="check"><input type="checkbox" name="' + section + '.' + f + '" data-n="' + c[section][f] + '" checked>' +
+        '<span>' + label + '</span><span class="check-n">' + (upTo ? 'up to ' : '') + num(c[section][f]) + '</span></label>').join('') + '</div>';
+    };
+    openModal('<div class="sheet-head"><h2>Fill in missing info</h2>' + closeBtn + '</div>' +
+      '<p class="fill-note">Fills empty cells in your sheet using the matched book, movie and show info. Anything you already typed stays as it is. TV uses the real run time and air date of each episode.</p>' +
+      '<p class="fill-note">Wrong cover means wrong info, so fix any bad matches first.</p>' +
+      group('books', 'Books') + group('movies', 'Movies') + group('episodes', 'TV episodes', true) +
+      '<p class="lookup-msg" id="fill-progress" hidden></p>' +
+      '<div class="form-actions"><button class="btn" data-act="close">Cancel</button><button class="btn primary" id="fill-go"></button></div>',
+      sheet => {
+        const go = sheet.querySelector('#fill-go');
+        const boxes = [...sheet.querySelectorAll('input[type=checkbox]')];
+        const update = () => {
+          const n = boxes.filter(b => b.checked).reduce((s, b) => s + Number(b.dataset.n), 0);
+          go.textContent = n ? 'Fill in ' + num(n) + ' cells' : 'Nothing selected';
+          go.disabled = !n;
+        };
+        boxes.forEach(b => b.addEventListener('change', update));
+        update();
+        go.addEventListener('click', async () => {
+          const sel = { books: [], movies: [], episodes: [] };
+          boxes.filter(b => b.checked).forEach(b => { const [s, f] = b.name.split('.'); sel[s].push(f); });
+          const prog = sheet.querySelector('#fill-progress');
+          const say = t => { prog.hidden = false; prog.textContent = t; };
+          go.disabled = true;
+          boxes.forEach(b => { b.disabled = true; });
+          let total = 0;
+          try {
+            if (sel.books.length) { say('Filling in books...'); total += (await api('fillMissing', { section: 'books', fields: sel.books })).result.filled; }
+            if (sel.movies.length) { say('Filling in movies...'); total += (await api('fillMissing', { section: 'movies', fields: sel.movies })).result.filled; }
+            if (sel.episodes.length) {
+              const keys = [...c.showKeys];
+              for (let i = 0; i < keys.length; i += 8) {
+                say('Filling in TV, show ' + (i + 1) + ' of ' + keys.length + '...');
+                total += (await api('fillMissing', { section: 'episodes', fields: sel.episodes, shows: keys.slice(i, i + 8) })).result.filled;
+              }
+            }
+            say('Done. Reloading your sheet...');
+            closeModal();
+            toast('Filled in ' + num(total) + ' cells');
+            sync(true);
+          } catch (e) {
+            say(e.message + (total ? ' (' + num(total) + ' cells were filled before this.)' : ''));
+            prog.classList.add('bad');
+            go.disabled = false;
+          }
+        });
+      });
   }
 
   // ---------- Show details ----------
@@ -1156,7 +1305,18 @@
         if (isAdd && section === 'episodes') wireEpisodeAutofill(form, dirty);
         const keyInput = form.elements[keyName];
         if (keyInput && SEC[section].kind) {
-          keyInput.addEventListener('change', () => { sheet.querySelector('#form-media').innerHTML = formMediaHTML(section, keyInput.value); });
+          keyInput.addEventListener('change', () => {
+            const val = keyInput.value.trim();
+            sheet.querySelector('#form-media').innerHTML = formMediaHTML(section, val);
+            if (val.length < 2) return;
+            const e = entryFor(SEC[section].kind, val);
+            if (e && e.source !== 'none') {
+              const filled = fillFromEntry(section, form, e);
+              if (filled.length) toast('Filled in ' + filled.join(', '));
+            } else if (isAdd && !(section === 'episodes' && showList().some(s => s.key === norm(val)))) {
+              startLookup(section, form, sheet); // new title: show likely matches right away
+            }
+          });
         }
         const findBtn = form.querySelector('[data-act=lookup]');
         if (findBtn) findBtn.addEventListener('click', ev => { ev.stopPropagation(); startLookup(section, form, sheet); });
@@ -1303,6 +1463,101 @@
     render();
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Chart details: hover on a computer, tap on a phone
+  // ---------------------------------------------------------------------------
+  const $tip = document.createElement('div');
+  $tip.id = 'tip';
+  $tip.hidden = true;
+  document.body.appendChild($tip);
+  let tipTarget = null;
+
+  const UNITS = { books: ['book', 'books'], episodes: ['episode', 'episodes'], movies: ['movie', 'movies'], drinks: ['drink', 'drinks'] };
+  const unit = (type, n) => dec(n) + ' ' + UNITS[type][n === 1 ? 0 : 1];
+
+  function periodItems(inPeriod, types) {
+    const lines = [], totals = {};
+    if (types.includes('books')) {
+      const list = records('books').filter(r => inPeriod(r.finished));
+      totals.books = list.length;
+      list.forEach(r => lines.push({ c: 'books', t: r.title, s: 'Finished' }));
+    }
+    if (types.includes('episodes')) {
+      const list = records('episodes').filter(r => inPeriod(r.date));
+      totals.episodes = list.length;
+      const byShow = new Map();
+      list.forEach(r => { const k = norm(r.show); const g = byShow.get(k) || { t: String(r.show).trim(), eps: [] }; g.eps.push(r); byShow.set(k, g); });
+      [...byShow.values()].sort((a, b) => b.eps.length - a.eps.length)
+        .forEach(g => lines.push({ c: 'tv', t: g.t, s: g.eps.length > 2 ? g.eps.length + ' episodes' : epLabel(g.eps) }));
+    }
+    if (types.includes('movies')) {
+      const list = records('movies').filter(r => inPeriod(r.date));
+      totals.movies = list.length;
+      list.forEach(r => lines.push({ c: 'movies', t: r.title, s: r.channel || 'Movie' }));
+    }
+    if (types.includes('drinks')) {
+      const list = sortedDesc('drinks', records('drinks').filter(r => inPeriod(r.date))).reverse();
+      totals.drinks = list.reduce((s, r) => s + (Number(r.drinks) || 0), 0);
+      list.forEach(r => lines.push({ c: 'drinks', t: r.reason || 'Drinks', s: fmtDate(r.date) + ', ' + unit('drinks', Number(r.drinks) || 0) }));
+    }
+    return { lines, totals };
+  }
+
+  function tipHTML(spec) {
+    const [kind, a, b] = spec.split(':');
+    let head, types, inPeriod;
+    if (kind === 'm') {
+      const prefix = thisYear() + '-' + pad(Number(b) + 1);
+      head = MONTH_NAMES[Number(b)];
+      types = [a];
+      inPeriod = d => (d || '').startsWith(prefix);
+    } else {
+      const d = parseISO(a);
+      head = WEEKDAYS[d.getDay()] + ', ' + fmtDate(a);
+      types = ['books', 'episodes', 'movies'];
+      inPeriod = x => x === a;
+    }
+    const { lines, totals } = periodItems(inPeriod, types);
+    const sum = types.filter(t => totals[t]).map(t => unit(t, totals[t])).join(', ') || 'Nothing logged';
+    const shown = lines.slice(0, 8);
+    return '<div class="tip-head">' + esc(head) + '</div><div class="tip-sum">' + esc(sum) + '</div>' +
+      (shown.length ? '<ul>' + shown.map(l => '<li><span class="dot ' + l.c + '"></span><span class="tip-t">' + esc(l.t) + '</span><span class="tip-s">' + esc(l.s) + '</span></li>').join('') + '</ul>' : '') +
+      (lines.length > shown.length ? '<div class="tip-more">and ' + (lines.length - shown.length) + ' more</div>' : '');
+  }
+
+  function showTip(el) {
+    if (tipTarget) tipTarget.classList.remove('tip-on');
+    tipTarget = el;
+    el.classList.add('tip-on');
+    $tip.innerHTML = tipHTML(el.getAttribute('data-tip'));
+    $tip.hidden = false;
+    const r = el.getBoundingClientRect(), w = $tip.offsetWidth, h = $tip.offsetHeight;
+    const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), window.innerWidth - w - 8);
+    let top = r.top - h - 10;
+    if (top < 8) top = r.bottom + 10;
+    $tip.style.left = left + 'px';
+    $tip.style.top = top + 'px';
+  }
+
+  function hideTip() {
+    if (tipTarget) tipTarget.classList.remove('tip-on');
+    tipTarget = null;
+    $tip.hidden = true;
+  }
+
+  document.addEventListener('pointerover', e => {
+    if (e.pointerType !== 'mouse') return;
+    const t = e.target.closest && e.target.closest('[data-tip]');
+    if (t && t !== tipTarget) showTip(t);
+  });
+  document.addEventListener('pointerout', e => {
+    if (e.pointerType !== 'mouse') return;
+    const t = e.target.closest && e.target.closest('[data-tip]');
+    if (t && !(e.relatedTarget && t.contains(e.relatedTarget))) hideTip();
+  });
+  window.addEventListener('scroll', hideTip, { passive: true });
+
   // ---------------------------------------------------------------------------
   // Toast
   // ---------------------------------------------------------------------------
@@ -1320,6 +1575,7 @@
   const ACTIONS = {
     sync: () => sync(),
     syncNow: () => { closeModal(); sync(); },
+    openFill: () => openFill(),
     settings: () => openSettings(),
     close: () => closeModal(),
     add: () => {
@@ -1363,9 +1619,10 @@
     showEpisodes: el => {
       const s = showList().find(x => x.key === el.dataset.show);
       if (!s) return;
-      listState('episodes').q = s.title;
-      closeModal();
-      setTimeout(() => { location.hash = '#/tv/episodes'; }, 0);
+      listState('episodes').q = '';
+      modalOpen = false;
+      $modal.innerHTML = '';
+      location.replace('#/tv/episodes/' + encodeURIComponent(s.key)); // replaces the card's history entry instead of going back
     },
     disconnect: () => {
       if (!confirm('Disconnect this device? Your sheet is not affected. You would just enter the URL and passcode again.')) return;
@@ -1377,6 +1634,9 @@
   };
 
   document.addEventListener('click', e => {
+    const tipEl = e.target.closest('[data-tip]');
+    if (tipEl) { if (tipEl === tipTarget && e.pointerType !== 'mouse' && !$tip.hidden) hideTip(); else showTip(tipEl); return; }
+    if (!e.target.closest('#tip')) hideTip();
     const t = e.target.closest('[data-go],[data-edit],[data-act]');
     if (!t) return;
     if (t.dataset.go) {
