@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.3.0';
+  const VERSION = '2.4.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -936,7 +936,11 @@
     if (!fromHistory) history.back();
   }
 
-  window.addEventListener('popstate', () => { if (modalOpen) closeModal(true); });
+  window.addEventListener('popstate', () => {
+    const lb = document.querySelector('.lightbox');
+    if (lb) lb.remove();
+    if (modalOpen) closeModal(true);
+  });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && modalOpen && !document.querySelector('.ac:not([hidden])')) closeModal(); });
   $modal.addEventListener('click', e => { if (e.target.hasAttribute('data-overlay')) closeModal(); });
 
@@ -1048,11 +1052,12 @@
       : (item.e.source === 'none' ? '' : '<button class="btn small ok" data-act="rvRight"' + a + '>Looks right</button>') +
         '<button class="btn small" data-act="rvChange"' + a + '>Change</button>' +
         '<button class="btn small" data-act="rvNone"' + a + '>No match</button>';
-    return '<div class="rv-row">' + thumb(item.kind, item.title, 'md') +
-      '<div class="rv-main"><div class="rv-title">' + esc(item.title) + '<span class="rv-kind">' + KIND_LABEL[item.kind] + '</span></div>' +
-      '<div class="rv-sub">' + esc(matchLine(item)) + '</div>' +
-      (item.flags.length ? '<div class="rv-flag">' + esc(item.flags.join('. ')) + '</div>' : '') +
-      '<div class="rv-actions">' + actions + '</div></div></div>';
+    return '<div class="rv-row"><button class="rv-open" data-act="rvOpen" data-key="' + esc(item.key) + '" data-group="' + item.group + '">' + thumb(item.kind, item.title, 'md') +
+      '<span class="rv-main"><span class="rv-title">' + esc(item.title) + '<span class="rv-kind">' + KIND_LABEL[item.kind] + '</span></span>' +
+      '<span class="rv-sub">' + esc(matchLine(item)) + '</span>' +
+      (item.flags.length ? '<span class="rv-flag">' + esc(item.flags.join('. ')) + '</span>' : '') +
+      '<span class="rv-more">Compare</span></span></button>' +
+      '<div class="rv-actions">' + actions + '</div></div>';
   }
 
   function stepsHTML(step) {
@@ -1220,6 +1225,127 @@
     }
   }
 
+
+  // ---------- Review: detail card with a side-by-side comparison ----------
+  const detailsCache = new Map();
+
+  function bigImage(url) {
+    return String(url || '')
+      .replace('/t/p/w185/', '/t/p/w780/')
+      .replace(/-M\.jpg$/, '-L.jpg')
+      .replace('/medium_portrait/', '/original_untouched/');
+  }
+
+  function openLightbox(src) {
+    const lb = document.createElement('div');
+    lb.className = 'lightbox';
+    lb.innerHTML = '<img src="' + esc(src) + '" alt=""><span class="lightbox-hint">Tap anywhere to close</span>';
+    lb.addEventListener('click', () => lb.remove());
+    document.body.appendChild(lb);
+  }
+
+  function sheetSide(item) {
+    if (item.kind === 'book') {
+      const r = sortedDesc('books').find(x => norm(x.title) === norm(item.title)) || {};
+      return { title: r.title, author: r.author, year: r.year, pages: r.pages, genre: r.genre };
+    }
+    if (item.kind === 'movie') {
+      const r = sortedDesc('movies').find(x => norm(x.title) === norm(item.title)) || {};
+      return { title: r.title, year: r.year, runtime: r.runtime, genre: r.genre, watched: r.date };
+    }
+    const eps = records('episodes').filter(r => norm(r.show) === norm(item.title));
+    const rts = eps.map(r => Number(r.runtime)).filter(n => n > 0).sort((a, b) => a - b);
+    const s = showList().find(x => x.key === norm(item.title)) || {};
+    return { title: item.title, year: item.sheet.minYear, episodes: s.count, runtime: rts.length ? rts[Math.floor(rts.length / 2)] : null, network: topValue(eps.map(r => r.channel)) };
+  }
+
+  function compareRows(item, mine, det) {
+    const info = item.e.info || {};
+    const theirs = Object.assign({}, info, { title: (det && det.title) || info.matchTitle || '', author: info.author || (det && det.author) || '' });
+    const fillable = item.kind === 'book' ? ['author', 'year', 'pages', 'genre'] : item.kind === 'movie' ? ['runtime', 'year', 'genre'] : ['runtime', 'year'];
+    const rows = item.kind === 'book'
+      ? [['title', 'Title'], ['author', 'Author'], ['year', 'Year published'], ['pages', 'Pages'], ['genre', 'Genre']]
+      : item.kind === 'movie'
+        ? [['title', 'Title'], ['year', 'Release year'], ['runtime', 'Run time'], ['genre', 'Genre']]
+        : [['title', 'Title'], ['year', 'First season'], ['episodes', 'Episodes'], ['runtime', 'Run time'], ['network', 'Channel']];
+    if (item.kind === 'show') { theirs.episodes = info.aired; }
+    const show = (k, v) => (blank(v) ? '' : k === 'runtime' ? fmtMins(v) : String(v));
+    return rows.map(([k, label]) => {
+      const a = mine[k], b = theirs[k];
+      let cls = '', note = '';
+      if (blank(a) && !blank(b) && fillable.includes(k) && item.kind !== 'show') { cls = 'fill'; note = 'fills in'; }
+      else if (!blank(a) && !blank(b)) {
+        if (k === 'title') cls = similarTitle(a, b) ? '' : 'diff';
+        else if (k === 'author') cls = authorsOverlap(a, b) ? '' : 'diff';
+        else if (k === 'year') cls = Math.abs(Number(a) - Number(b)) > 1 ? 'diff' : '';
+        else if (k === 'runtime') cls = Math.abs(Number(a) - Number(b)) > 15 ? 'diff' : '';
+        else if (k === 'episodes') cls = Number(a) > Number(b) + 2 ? 'diff' : '';
+        else if (k === 'pages') cls = Math.abs(Number(a) - Number(b)) > Math.max(40, Number(a) * 0.25) ? 'diff' : '';
+      }
+      return '<tr class="' + cls + '"><th>' + label + '</th><td>' + (esc(show(k, a)) || '<span class="none">empty</span>') + '</td>' +
+        '<td>' + (esc(show(k, b)) || '<span class="none">unknown</span>') + (note ? '<span class="cmp-note">' + note + '</span>' : '') + '</td></tr>';
+    }).join('');
+  }
+
+  function openReviewDetail(key, seq) {
+    const item = reviewItems().items.find(i => i.key === key);
+    if (!item) { closeModal(); return; }
+    const pos = seq.indexOf(key);
+    const e = item.e, info = e.info || {};
+    const source = { book: 'Open Library', movie: 'TMDB', show: 'TVmaze' }[item.kind];
+    const det = detailsCache.get(key);
+    const mine = sheetSide(item);
+    const groupName = { flag: 'Needs a look', fine: 'Probably right', done: 'Confirmed' }[item.group];
+    const a = ' data-kind="' + item.kind + '" data-title="' + esc(item.title) + '" data-key="' + esc(item.key) + '"';
+    const img = e.image ? '<button class="cover-btn" data-act="enlarge" data-src="' + esc(bigImage(e.image)) + '" aria-label="Enlarge picture"><img class="thumb xl" src="' + esc(e.image) + '" alt=""></button>' : thumb(item.kind, item.title, 'xl');
+
+    openModal('<div class="sheet-head"><h2>' + esc(item.title) + '</h2>' + closeBtn + '</div>' +
+      '<div class="rd-top">' + img + '<div class="rd-info">' +
+      '<span class="rd-tag">' + KIND_LABEL[item.kind] + ', ' + groupName + (pos >= 0 ? ', ' + (pos + 1) + ' of ' + seq.length : '') + '</span>' +
+      (e.source === 'none' ? '<p class="rd-title">No match</p>' :
+        '<p class="rd-title">' + esc((det && det.title) || info.matchTitle || 'Matched title loading...') + (det && det.year ? ' (' + esc(det.year) + ')' : '') + '</p>' +
+        '<p class="rd-about" id="rd-about">' + (det ? esc(det.about || 'No description.') : 'Loading description...') + '</p>' +
+        (det && det.url ? '<a class="rd-link" href="' + esc(det.url) + '" target="_blank" rel="noopener">View on ' + source + '</a>' : '')) +
+      '</div></div>' +
+      (item.flags.length ? '<p class="rv-flag rd-flags">' + esc(item.flags.join('. ')) + '</p>' : '') +
+      (e.source === 'none' ? '' : '<table class="cmp"><thead><tr><th></th><th>Your sheet</th><th>' + source + '</th></tr></thead><tbody>' + compareRows(item, mine, det) + '</tbody></table>' +
+        '<p class="cmp-legend"><span class="sw diff"></span>Different <span class="sw fill"></span>Fills an empty cell</p>') +
+      '<div class="form-actions rd-actions">' +
+      (item.group === 'done' ? '' : (e.source === 'none' ? '' : '<button class="btn primary" data-act="rdRight"' + a + '>Looks right</button>') +
+        '<button class="btn" data-act="rdNone"' + a + '>No match</button>') +
+      '<button class="btn" data-act="rdChange"' + a + '>Change</button>' +
+      (pos >= 0 && pos < seq.length - 1 ? '<button class="btn" data-act="rdSkip"' + a + '>Skip</button>' : '') +
+      '</div>',
+      sheet => {
+        sheet._seq = seq;
+        if (!det && e.source !== 'none' && e.sourceId) {
+          api('matchDetails', { kind: item.kind, id: e.sourceId }).then(j => {
+            detailsCache.set(key, j.details);
+            if (modalOpen && $modal.querySelector('.sheet') === sheet) openReviewDetail(key, seq);
+          }).catch(() => { const el = sheet.querySelector('#rd-about'); if (el) el.textContent = 'Could not load the description.'; });
+        }
+      });
+  }
+
+  function nextInSeq(seq, key) {
+    const i = seq.indexOf(key);
+    return i >= 0 && i < seq.length - 1 ? seq[i + 1] : null;
+  }
+
+  async function reviewDetailAction(act, el) {
+    const d = el.dataset;
+    const sheet = $modal.querySelector('.sheet');
+    const seq = (sheet && sheet._seq) || [];
+    const next = nextInSeq(seq, d.key);
+    const go = () => { render(); if (next) openReviewDetail(next, seq); else { closeModal(); toast('All done in this group'); } };
+    try {
+      if (act === 'rdRight') { el.disabled = true; saveEntries((await api('confirmMatches', { keys: [d.key] })).entries); go(); }
+      else if (act === 'rdNone') { el.disabled = true; saveEntries([(await api('rejectMatch', { kind: d.kind, title: d.title })).entry]); go(); }
+      else if (act === 'rdSkip') { if (next) openReviewDetail(next, seq); }
+      else if (act === 'rdChange') { detailsCache.delete(d.key); openRematch(d.kind, d.title, () => { render(); openReviewDetail(d.key, seq); }); }
+    } catch (e) { toast(e.message, true); el.disabled = false; }
+  }
+
   async function reviewAction(act, el) {
     const R = rv();
     const d = el.dataset;
@@ -1250,7 +1376,7 @@
       : '<button class="btn" data-act="setFinished" data-show="' + esc(key) + '" data-value="Y">Mark finished</button>';
     const stat = (label, value) => '<div><dt>' + label + '</dt><dd>' + esc(value) + '</dd></div>';
     openModal('<div class="sheet-head"><h2>' + esc(s.title) + '</h2>' + closeBtn + '</div>' +
-      '<div class="detail-head">' + thumb('show', s.title, 'lg') + '<div>' +
+      '<div class="detail-head">' + (e && e.image ? '<button class="cover-btn" data-act="enlarge" data-src="' + esc(bigImage(e.image)) + '" aria-label="Enlarge picture">' + thumb('show', s.title, 'lg') + '</button>' : thumb('show', s.title, 'lg')) + '<div>' +
       '<span class="pill ' + s.status + '">' + STATUS_LABEL[s.status] + '</span>' +
       '<p class="detail-meta">' + esc([info.network, info.year, info.status === 'Ended' ? 'Ended' : info.status ? 'Still airing' : ''].filter(Boolean).join(', ')) + '</p>' +
       '<button class="link-btn" data-act="rematchShow" data-show="' + esc(key) + '">' + (e && e.image ? 'Wrong picture? Change it' : 'Find picture and info') + '</button>' +
@@ -1822,6 +1948,16 @@
   const ACTIONS = {
     sync: () => sync(),
     syncNow: () => { closeModal(); sync(); },
+    rvOpen: el => {
+      const R = rv();
+      const seq = reviewItems().items.filter(i => i.group === el.dataset.group && (R.filter === 'all' || i.kind === R.filter)).map(i => i.key);
+      openReviewDetail(el.dataset.key, seq);
+    },
+    rdRight: el => reviewDetailAction('rdRight', el),
+    rdNone: el => reviewDetailAction('rdNone', el),
+    rdSkip: el => reviewDetailAction('rdSkip', el),
+    rdChange: el => reviewDetailAction('rdChange', el),
+    enlarge: el => openLightbox(el.dataset.src),
     rvRight: el => reviewAction('rvRight', el),
     rvNone: el => reviewAction('rvNone', el),
     rvChange: el => reviewAction('rvChange', el),
