@@ -1,6 +1,8 @@
 // Keeps the app loading fast and working offline with your last synced data.
 // Only the app files are cached here. Your sheet data lives in the app's own storage.
-const CACHE = 'media-tracker-v1';
+const CACHE = 'media-tracker-v3';
+const IMAGES = 'media-tracker-images'; // covers and posters, kept across app updates
+const IMAGE_HOSTS = ['covers.openlibrary.org', 'image.tmdb.org', 'static.tvmaze.com'];
 const SHELL = [
   './',
   './index.html',
@@ -19,7 +21,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== IMAGES).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -32,6 +34,20 @@ self.addEventListener('fetch', event => {
   // App files: network first so updates show up right away, cache when offline or slow.
   if (url.origin === self.location.origin) {
     event.respondWith(networkFirst(req));
+    return;
+  }
+
+  // Covers and posters: once downloaded, load from the phone.
+  if (IMAGE_HOSTS.includes(url.hostname)) {
+    event.respondWith(
+      caches.open(IMAGES).then(async cache => {
+        const hit = await cache.match(req);
+        if (hit) return hit;
+        const res = await fetch(req);
+        if (res && (res.ok || res.type === 'opaque')) cache.put(req, res.clone());
+        return res;
+      })
+    );
     return;
   }
 
@@ -51,7 +67,7 @@ async function networkFirst(req) {
   const cache = await caches.open(CACHE);
   try {
     const res = await Promise.race([
-      fetch(req),
+      fetch(req, { cache: 'no-cache' }), // always check GitHub for a newer copy instead of the browser's 10 minute cache
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3500)),
     ]);
     if (res && res.ok) cache.put(req, res.clone());
