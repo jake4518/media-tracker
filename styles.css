@@ -491,3 +491,9 @@ input[type="date"] { color-scheme: dark; min-height: 44px; }
 }
 .lightbox img { max-width: 100%; max-height: calc(100vh - 80px); border-radius: 10px; object-fit: contain; }
 .lightbox-hint { color: var(--faint); font-size: 13px; }
+
+/* ============ v2.5 ============ */
+.rm-fields { display: flex; gap: 8px; flex-wrap: wrap; }
+.rm-fields input { flex: 1 1 160px; width: auto; }
+.rm-none { justify-content: flex-start; margin-top: 12px; }
+.cand-src { display: block; font-size: 11.5px; color: var(--faint); margin-top: 1px; }

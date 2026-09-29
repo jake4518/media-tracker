@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.4.0';
+  const VERSION = '2.5.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -1037,7 +1037,7 @@
 
   function matchLine(item) {
     const e = item.e, info = e.info || {};
-    if (e.source === 'none') return e.locked ? 'Skipped, no match' : 'Nothing found';
+    if (e.source === 'none') return e.locked ? 'No match (removed)' : 'Nothing found automatically';
     const bits = [info.matchTitle && !similarTitle(item.title, info.matchTitle) ? '"' + info.matchTitle + '"' : '', info.year];
     if (item.kind === 'book') bits.push(info.author, info.pages ? info.pages + ' pages' : '');
     if (item.kind === 'movie') bits.push(info.runtime ? fmtMins(info.runtime) : '', info.genre);
@@ -1047,11 +1047,10 @@
 
   function reviewRow(item) {
     const a = ' data-kind="' + item.kind + '" data-title="' + esc(item.title) + '" data-key="' + esc(item.key) + '"';
-    const actions = item.group === 'done'
-      ? '<button class="btn small" data-act="rvChange"' + a + '>Change</button>'
-      : (item.e.source === 'none' ? '' : '<button class="btn small ok" data-act="rvRight"' + a + '>Looks right</button>') +
-        '<button class="btn small" data-act="rvChange"' + a + '>Change</button>' +
-        '<button class="btn small" data-act="rvNone"' + a + '>No match</button>';
+    const none = item.e.source === 'none';
+    const actions = (item.group !== 'done' && !none ? '<button class="btn small ok" data-act="rvRight"' + a + '>Looks right</button>' : '') +
+      '<button class="btn small" data-act="rvChange"' + a + '>' + (none ? 'Find a match' : 'Change') + '</button>' +
+      (none && item.e.locked ? '' : '<button class="btn small" data-act="rvNone"' + a + '>Remove match</button>');
     return '<div class="rv-row"><button class="rv-open" data-act="rvOpen" data-key="' + esc(item.key) + '" data-group="' + item.group + '">' + thumb(item.kind, item.title, 'md') +
       '<span class="rv-main"><span class="rv-title">' + esc(item.title) + '<span class="rv-kind">' + KIND_LABEL[item.kind] + '</span></span>' +
       '<span class="rv-sub">' + esc(matchLine(item)) + '</span>' +
@@ -1095,7 +1094,7 @@
     };
     h += block('flag', 'Needs a look');
     h += block('fine', 'Probably right', '<button class="btn small ok" data-act="rvAllFine">Confirm all ' + num(groups.fine.length) + '</button>');
-    h += block('done', 'Confirmed');
+    h += block('done', 'Confirmed or removed');
     const confirmed = items.filter(i => i.group === 'done' && i.e.source !== 'none').length;
     h += '<div class="step-bar"><span>' + num(confirmed) + ' confirmed</span><button class="btn primary" data-act="rvToPreview"' + (confirmed ? '' : ' disabled') + '>Next: preview changes</button></div>';
     return h;
@@ -1292,17 +1291,17 @@
     if (!item) { closeModal(); return; }
     const pos = seq.indexOf(key);
     const e = item.e, info = e.info || {};
-    const source = { book: 'Open Library', movie: 'TMDB', show: 'TVmaze' }[item.kind];
+    const source = e.source === 'googlebooks' ? 'Google Books' : { book: 'Open Library', movie: 'TMDB', show: 'TVmaze' }[item.kind];
     const det = detailsCache.get(key);
     const mine = sheetSide(item);
-    const groupName = { flag: 'Needs a look', fine: 'Probably right', done: 'Confirmed' }[item.group];
+    const groupName = e.source === 'none' && e.locked ? 'Removed' : { flag: 'Needs a look', fine: 'Probably right', done: 'Confirmed' }[item.group];
     const a = ' data-kind="' + item.kind + '" data-title="' + esc(item.title) + '" data-key="' + esc(item.key) + '"';
     const img = e.image ? '<button class="cover-btn" data-act="enlarge" data-src="' + esc(bigImage(e.image)) + '" aria-label="Enlarge picture"><img class="thumb xl" src="' + esc(e.image) + '" alt=""></button>' : thumb(item.kind, item.title, 'xl');
 
     openModal('<div class="sheet-head"><h2>' + esc(item.title) + '</h2>' + closeBtn + '</div>' +
       '<div class="rd-top">' + img + '<div class="rd-info">' +
       '<span class="rd-tag">' + KIND_LABEL[item.kind] + ', ' + groupName + (pos >= 0 ? ', ' + (pos + 1) + ' of ' + seq.length : '') + '</span>' +
-      (e.source === 'none' ? '<p class="rd-title">No match</p>' :
+      (e.source === 'none' ? '<p class="rd-title">No match</p><p class="rd-about">' + (e.locked ? 'You removed the match. It won\'t be matched again or used to fill your sheet. Tap Find a match to search again.' : 'Nothing was found automatically. Tap Find a match to search yourself.') + '</p>' :
         '<p class="rd-title">' + esc((det && det.title) || info.matchTitle || 'Matched title loading...') + (det && det.year ? ' (' + esc(det.year) + ')' : '') + '</p>' +
         '<p class="rd-about" id="rd-about">' + (det ? esc(det.about || 'No description.') : 'Loading description...') + '</p>' +
         (det && det.url ? '<a class="rd-link" href="' + esc(det.url) + '" target="_blank" rel="noopener">View on ' + source + '</a>' : '')) +
@@ -1311,15 +1310,15 @@
       (e.source === 'none' ? '' : '<table class="cmp"><thead><tr><th></th><th>Your sheet</th><th>' + source + '</th></tr></thead><tbody>' + compareRows(item, mine, det) + '</tbody></table>' +
         '<p class="cmp-legend"><span class="sw diff"></span>Different <span class="sw fill"></span>Fills an empty cell</p>') +
       '<div class="form-actions rd-actions">' +
-      (item.group === 'done' ? '' : (e.source === 'none' ? '' : '<button class="btn primary" data-act="rdRight"' + a + '>Looks right</button>') +
-        '<button class="btn" data-act="rdNone"' + a + '>No match</button>') +
-      '<button class="btn" data-act="rdChange"' + a + '>Change</button>' +
+      (item.group !== 'done' && e.source !== 'none' ? '<button class="btn primary" data-act="rdRight"' + a + '>Looks right</button>' : '') +
+      '<button class="btn" data-act="rdChange"' + a + '>' + (e.source === 'none' ? 'Find a match' : 'Change') + '</button>' +
+      (e.source === 'none' && e.locked ? '' : '<button class="btn" data-act="rdNone"' + a + '>Remove match</button>') +
       (pos >= 0 && pos < seq.length - 1 ? '<button class="btn" data-act="rdSkip"' + a + '>Skip</button>' : '') +
       '</div>',
       sheet => {
         sheet._seq = seq;
         if (!det && e.source !== 'none' && e.sourceId) {
-          api('matchDetails', { kind: item.kind, id: e.sourceId }).then(j => {
+          api('matchDetails', { kind: item.kind, id: e.sourceId, source: e.source }).then(j => {
             detailsCache.set(key, j.details);
             if (modalOpen && $modal.querySelector('.sheet') === sheet) openReviewDetail(key, seq);
           }).catch(() => { const el = sheet.querySelector('#rd-about'); if (el) el.textContent = 'Could not load the description.'; });
@@ -1340,7 +1339,7 @@
     const go = () => { render(); if (next) openReviewDetail(next, seq); else { closeModal(); toast('All done in this group'); } };
     try {
       if (act === 'rdRight') { el.disabled = true; saveEntries((await api('confirmMatches', { keys: [d.key] })).entries); go(); }
-      else if (act === 'rdNone') { el.disabled = true; saveEntries([(await api('rejectMatch', { kind: d.kind, title: d.title })).entry]); go(); }
+      else if (act === 'rdNone') { el.disabled = true; saveEntries([(await api('rejectMatch', { kind: d.kind, title: d.title })).entry]); toast('Match removed'); go(); }
       else if (act === 'rdSkip') { if (next) openReviewDetail(next, seq); }
       else if (act === 'rdChange') { detailsCache.delete(d.key); openRematch(d.kind, d.title, () => { render(); openReviewDetail(d.key, seq); }); }
     } catch (e) { toast(e.message, true); el.disabled = false; }
@@ -1379,7 +1378,7 @@
       '<div class="detail-head">' + (e && e.image ? '<button class="cover-btn" data-act="enlarge" data-src="' + esc(bigImage(e.image)) + '" aria-label="Enlarge picture">' + thumb('show', s.title, 'lg') + '</button>' : thumb('show', s.title, 'lg')) + '<div>' +
       '<span class="pill ' + s.status + '">' + STATUS_LABEL[s.status] + '</span>' +
       '<p class="detail-meta">' + esc([info.network, info.year, info.status === 'Ended' ? 'Ended' : info.status ? 'Still airing' : ''].filter(Boolean).join(', ')) + '</p>' +
-      '<button class="link-btn" data-act="rematchShow" data-show="' + esc(key) + '">' + (e && e.image ? 'Wrong picture? Change it' : 'Find picture and info') + '</button>' +
+      '<button class="link-btn" data-act="rematchShow" data-show="' + esc(key) + '">' + (e && e.image ? 'Wrong match? Change or remove it' : 'Find picture and info') + '</button>' +
       '</div></div>' +
       '<dl class="stats">' +
       stat('Started', fmtDate(s.first) || 'Unknown') +
@@ -1394,23 +1393,41 @@
       '<button class="btn" data-act="showEpisodes" data-show="' + esc(key) + '">See episodes</button></div>');
   }
 
-  // Search panel used by "change picture" on a show
-  function openRematch(kind, title, after) {
+  // Search screen for picking a different match (or saying none of them are right)
+  function openRematch(kind, title, after, author) {
+    if (kind === 'book' && author === undefined) {
+      const r = sortedDesc('books').find(x => norm(x.title) === norm(title));
+      author = (r && r.author) || '';
+    }
     openModal('<div class="sheet-head"><h2>Find a match</h2>' + closeBtn + '</div>' +
-      '<div class="with-btn"><input id="rm-q" type="text" value="' + esc(title) + '" autocomplete="off"><button class="btn" id="rm-go" type="button">Search</button></div>' +
-      '<div class="lookup-panel" id="rm-results"></div>',
+      '<p class="fill-note">For "' + esc(title) + '". Edit the search if the right one isn\'t showing.</p>' +
+      '<div class="rm-fields"><input id="rm-q" type="text" value="' + esc(title) + '" autocomplete="off" aria-label="Title">' +
+      (kind === 'book' ? '<input id="rm-a" type="text" value="' + esc(author || '') + '" placeholder="Author (optional)" autocomplete="off" aria-label="Author">' : '') +
+      '<button class="btn" id="rm-go" type="button">Search</button></div>' +
+      '<div class="lookup-panel" id="rm-results"></div>' +
+      '<div class="form-actions rm-none"><button class="btn" id="rm-none" type="button">None of these are right</button></div>',
       sheet => {
         const q = sheet.querySelector('#rm-q');
+        const aIn = sheet.querySelector('#rm-a');
         const box = sheet.querySelector('#rm-results');
-        const go = () => runLookup(box, kind, q.value, '', async cand => {
+        const go = () => runLookup(box, kind, q.value, aIn ? aIn.value : '', async cand => {
           const j = await api('match', { kind, title, candidate: cand });
           saveEntries([j.entry]);
-          toast('Picture saved');
+          toast('Match saved');
           render();
           after();
         });
         sheet.querySelector('#rm-go').addEventListener('click', go);
-        q.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); go(); } });
+        [q, aIn].forEach(el => el && el.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); go(); } }));
+        sheet.querySelector('#rm-none').addEventListener('click', async ev => {
+          ev.currentTarget.disabled = true;
+          try {
+            saveEntries([(await api('rejectMatch', { kind, title })).entry]);
+            toast('Match removed');
+            render();
+            after();
+          } catch (e) { toast(e.message, true); ev.currentTarget.disabled = false; }
+        });
         go();
       });
   }
@@ -1429,7 +1446,8 @@
     if (!results.length) { box.innerHTML = '<p class="lookup-msg">No matches found. Try a shorter title.</p>'; return; }
     box.innerHTML = results.map((c, i) => '<button type="button" class="cand" data-i="' + i + '">' +
       (c.image ? '<img class="thumb md" src="' + esc(c.image) + '" alt="" loading="lazy">' : '<span class="thumb md ph ' + COLOR[kind] + '"></span>') +
-      '<span><span class="cand-title">' + esc(c.title) + '</span><span class="cand-sub">' + esc([c.year, c.sub].filter(Boolean).join(', ')) + '</span></span></button>').join('');
+      '<span><span class="cand-title">' + esc(c.title) + '</span><span class="cand-sub">' + esc([c.year, c.sub].filter(Boolean).join(', ')) + '</span>' +
+      (kind === 'book' ? '<span class="cand-src">' + (c.source === 'googlebooks' ? 'Google Books' : 'Open Library') + '</span>' : '') + '</span></button>').join('');
     box.querySelectorAll('.cand').forEach(b => b.addEventListener('click', async () => {
       box.querySelectorAll('.cand').forEach(x => { x.disabled = true; });
       b.classList.add('picked');
