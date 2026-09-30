@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.5.0';
+  const VERSION = '2.6.1';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -633,8 +633,8 @@
     reading.forEach(r => {
       const day = (daysBetween(r.started, today) || 0) + 1;
       h += '<div class="live-row">' + thumb('book', r.title, 'md') + '<button class="main" data-edit="books:' + r._row + '"><div class="title">' + esc(r.title) + '</div>' +
-        '<div class="meta">' + esc([r.author, 'day ' + day].filter(Boolean).join(', ')) + '</div></button>' +
-        '<button class="btn small" data-act="finishBook" data-row="' + r._row + '">Finished today</button></div>';
+        '<div class="meta">' + esc([r.author, 'started ' + fmtDate(r.started) + ', day ' + day].filter(Boolean).join(', ')) + '</div></button>' +
+        '<button class="btn small" data-act="finishBook" data-row="' + r._row + '">Mark finished</button></div>';
     });
     h += '</div>';
 
@@ -699,7 +699,7 @@
       { v: num(list.length), l: 'Movies' },
       { v: hoursText(list.reduce((s, r) => s + movieMinutes(r), 0)), l: 'Hours watched' },
       { v: (list.length / months).toFixed(1), l: 'Per month' },
-      { v: topValue(list.map(r => r.channel)), l: 'Watched most on', text: true },
+      { v: topValue(list.map(r => r.genre || (entryFor('movie', r.title) || { info: {} }).info.genre)), l: 'Top genre', text: true },
     ];
   }
 
@@ -711,8 +711,8 @@
     h += rowsHTML('movies', sortedDesc('movies').slice(0, RECENT_ROWS), [
       { label: '', w: '24px', html: r => thumb('movie', r.title, 'xs') },
       { k: 'title', label: 'Title', w: 'minmax(0,2.2fr)', cls: 'strong' },
-      { k: 'channel', label: 'Where', w: 'minmax(0,1fr)', cls: 'muted' },
-      { k: 'date', label: 'Date', w: '64px', fmt: fmtDate, cls: 'muted num' },
+      { k: 'year', label: 'Year', w: '44px', cls: 'muted num' },
+      { k: 'date', label: 'Watched', w: '64px', fmt: fmtDate, cls: 'muted num' },
     ]);
     h += '<button class="link-btn" data-go="#/movies/all">All movies (' + num(all.length) + ')</button>';
     return h;
@@ -726,6 +726,7 @@
       { v: dec(total), l: 'Drinks' },
       { v: (total / Math.max(1, days / 7)).toFixed(1), l: 'Per week' },
       { v: num(list.length), l: 'Nights' },
+      { v: list.length ? (total / list.length).toFixed(1) : '0', l: 'Drinks per event' },
       { v: dec(biggest), l: 'Biggest night' },
     ];
   }
@@ -782,7 +783,6 @@
       { label: '', w: '24px', html: r => thumb('movie', r.title, 'xs') },
       { k: 'title', label: 'Title', w: 'minmax(200px,2fr)', cls: 'strong' },
       { k: 'date', label: 'Date', w: '104px', fmt: fmtDate, cls: 'muted' },
-      { k: 'channel', label: 'Where', w: '120px', cls: 'muted' },
       { k: 'runtime', label: 'Run time', w: '76px', fmt: fmtMins, cls: 'muted num' },
       { k: 'year', label: 'Year', w: '52px', cls: 'muted num' },
       { k: 'genre', label: 'Genre', w: '160px', cls: 'muted' },
@@ -1532,10 +1532,10 @@
       { k: 'title', l: 'Title', t: 'text', req: true, lookup: true },
       { k: 'date', l: 'Date watched', t: 'date', half: true },
       { k: 'runtime', l: 'Run time (minutes)', t: 'minutes', half: true },
-      { k: 'channel', l: 'Where', t: 'text', list: 'channels', half: true },
       { k: 'year', l: 'Release year', t: 'number', half: true },
-      { k: 'genre', l: 'Genre', t: 'text', list: 'movieGenres' },
+      { k: 'genre', l: 'Genre', t: 'text', list: 'movieGenres', half: true },
       { k: 'thoughts', l: 'Thoughts and rating', t: 'textarea' },
+      { k: 'channel', l: 'Where (optional)', t: 'text', list: 'channels' },
     ],
     drinks: [
       { k: 'date', l: 'Date', t: 'date', req: true, half: true },
@@ -1645,6 +1645,7 @@
       '<form id="rec-form" novalidate><div class="form-body">' +
       '<div class="form-media" id="form-media">' + formMediaHTML(section, values[keyName]) + '</div>' +
       '<div class="form-grid">' + fields.map(f => fieldHTML(f, values[f.k])).join('') + '</div>' +
+      '<div class="form-warn" id="form-warn" hidden></div>' +
       '<div class="form-error" id="form-error" hidden></div></div>' +
       '<div class="form-actions" id="form-actions">' + (isAdd ? '' : '<button type="button" class="btn danger-text" id="del-btn">Delete</button><span class="spacer"></span>') +
       '<button type="button" class="btn" data-act="close">Cancel</button>' +
@@ -1675,7 +1676,44 @@
         }
         const findBtn = form.querySelector('[data-act=lookup]');
         if (findBtn) findBtn.addEventListener('click', ev => { ev.stopPropagation(); startLookup(section, form, sheet); });
-        form.addEventListener('submit', e => { e.preventDefault(); submitForm(section, rec, fields, form); });
+        const saveBtn = form.querySelector('#save-btn');
+        const saveLabel = saveBtn.textContent;
+        const warnBox = form.querySelector('#form-warn');
+        const guard = { ack: false };
+        let lastWarn = '';
+        const showWarnings = () => {
+          const w = formWarnings(section, rec, form, fields);
+          const text = w.join('|');
+          if (text !== lastWarn) {
+            // the warnings changed, so any earlier "save anyway" no longer counts
+            lastWarn = text;
+            warnBox.innerHTML = w.map(x => '<p>' + esc(x) + '</p>').join('');
+            warnBox.hidden = !w.length;
+            if (guard.ack) { guard.ack = false; saveBtn.textContent = saveLabel; saveBtn.classList.remove('warn'); }
+          }
+          return w;
+        };
+        let warnTimer;
+        const onEdit = () => {
+          clearTimeout(warnTimer);
+          warnTimer = setTimeout(showWarnings, 250);
+        };
+        form.addEventListener('input', onEdit);
+        form.addEventListener('change', onEdit);
+        showWarnings();
+        form.addEventListener('submit', e => {
+          e.preventDefault();
+          const w = showWarnings();
+          if (w.length && !guard.ack) {
+            guard.ack = true;
+            saveBtn.textContent = isAdd ? (section === 'episodes' ? 'Log anyway' : 'Add anyway') : 'Save anyway';
+            saveBtn.classList.add('warn');
+            warnBox.classList.remove('pulse'); void warnBox.offsetWidth; warnBox.classList.add('pulse');
+            warnBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            return;
+          }
+          submitForm(section, rec, fields, form);
+        });
         if (!isAdd) {
           const bar = sheet.querySelector('#form-actions'), confirmBar = sheet.querySelector('#confirm-bar');
           sheet.querySelector('#del-btn').addEventListener('click', () => { bar.hidden = true; confirmBar.hidden = false; });
@@ -1708,6 +1746,71 @@
       toast(filled.length ? 'Filled in ' + filled.join(', ') : 'Picture saved');
       render();
     });
+  }
+
+
+  // ---------- Safeguards: warnings before saving ----------
+  function formWarnings(section, rec, form, fields) {
+    const val = k => (form.elements[k] ? String(form.elements[k].value).trim() : '');
+    const w = [];
+    const today = todayISO();
+    if (val('date') && val('date') > today) w.push('The date is in the future.');
+    if (val('finished') && val('finished') > today) w.push('The finished date is in the future.');
+    if (val('started') && val('finished') && val('finished') < val('started')) w.push('Finished is before started.');
+
+    if (section === 'episodes' && val('show')) {
+      const key = norm(val('show'));
+      const season = val('season') === '' ? null : Number(val('season'));
+      const from = val('episode') === '' ? null : Number(val('episode'));
+      const to = val('through') === '' ? from : Number(val('through'));
+      const eps = records('episodes').filter(r => norm(r.show) === key && (!rec || r._row !== rec._row));
+      if (season !== null && from !== null) {
+        const dups = eps.filter(r => Number(r.season) === season && Number(r.episode) >= from && Number(r.episode) <= (to || from));
+        if (dups.length) {
+          w.push('Already logged: ' + dups.slice(0, 3).map(r => 'S' + r.season + ' E' + r.episode + ' on ' + fmtDate(r.date)).join(', ') +
+            (dups.length > 3 ? ', and ' + (dups.length - 3) + ' more' : '') + '. Saving counts ' + (dups.length === 1 ? 'it' : 'them') + ' twice.');
+        }
+        const last = sortedDesc('episodes', eps)[0];
+        if (!rec && last && !blank(last.season) && !blank(last.episode) && !dups.length) {
+          const ls = Number(last.season), le = Number(last.episode);
+          if (season === ls && from > le + 1) w.push('This skips ' + (from - le - 1 === 1 ? 'E' + (le + 1) : 'E' + (le + 1) + ' to E' + (from - 1)) + '. Your last was S' + ls + ' E' + le + '.');
+          else if (season > ls + 1) w.push('This jumps from season ' + ls + ' to season ' + season + '.');
+          else if (season > ls && from > 1) w.push('Season ' + season + ' starts at E' + from + '. Your last was S' + ls + ' E' + le + '.');
+          else if (season < ls) w.push('Season ' + season + ' is before your last episode (S' + ls + ' E' + le + ').');
+        }
+      }
+      if (from !== null && to !== null && to - from + 1 > 10) w.push('That logs ' + (to - from + 1) + ' episodes at once.');
+      if (from !== null && to !== null && to < from) w.push('"Through episode" is before the first episode.');
+      const e = entryFor('show', val('show'));
+      const s = showList().find(x => x.key === key);
+      if (!rec && e && e.info && e.info.aired && s && from !== null && s.count + (to - from + 1) > e.info.aired + 2) {
+        w.push('Only ' + e.info.aired + ' episodes have aired, and you would have ' + (s.count + (to - from + 1)) + ' logged.');
+      }
+    }
+    if (!rec && section === 'books' && val('title')) {
+      const same = records('books').find(r => norm(r.title) === norm(val('title')));
+      if (same) w.push('You already have this book' + (same.finished ? ', finished ' + fmtDate(same.finished) : same.started ? ', started ' + fmtDate(same.started) : '') + '.');
+    }
+    if (!rec && section === 'movies' && val('title')) {
+      const same = sortedDesc('movies').find(r => norm(r.title) === norm(val('title')));
+      if (same) w.push('You logged this movie on ' + fmtDate(same.date) + '. Save again only if you rewatched it.');
+    }
+    if (!rec && section === 'drinks' && val('date')) {
+      const same = records('drinks').find(r => r.date === val('date'));
+      if (same) w.push('There is already an entry for ' + fmtDate(same.date) + ' (' + dec(Number(same.drinks) || 0) + ' drinks, ' + (same.reason || 'no reason') + ').');
+    }
+    // Editing: call out anything that replaces a value you already had
+    if (rec) {
+      let values;
+      try { values = collect(fields, form); } catch (e) { values = null; }
+      if (values) {
+        const show = (f, v) => (f.t === 'date' ? fmtDate(v) : f.t === 'minutes' || f.t === 'hm' ? fmtMins(v) : String(v).slice(0, 40));
+        const changed = fields.filter(f => f.t !== 'ro' && !blank(rec[f.k]) && String(rec[f.k]) !== String(values[f.k]))
+          .map(f => f.l + ' from ' + show(f, rec[f.k]) + ' to ' + (values[f.k] === '' ? 'empty' : show(f, values[f.k])));
+        if (changed.length) w.push('You are changing ' + changed.join('; ') + '.');
+      }
+    }
+    return w;
   }
 
   function fillFromEntry(section, form, entry) {
@@ -1832,14 +1935,33 @@
     }
   }
 
-  async function finishBook(row) {
+  function openFinish(row) {
+    const rec = records('books').find(r => r._row === row);
+    if (!rec) return;
+    openModal('<div class="sheet-head"><h2>Finished it?</h2>' + closeBtn + '</div>' +
+      '<div class="form-media">' + thumb('book', rec.title, 'md') + '<div class="media-text"><span class="media-title">' + esc(rec.title) + '</span><span class="media-sub">Started ' + esc(fmtDate(rec.started)) + '</span></div></div>' +
+      '<div class="field"><label for="fin-date">Date finished</label><input id="fin-date" type="date" value="' + todayISO() + '" min="' + esc(rec.started || '') + '"></div>' +
+      '<div class="form-actions"><button class="btn" data-act="close">Cancel</button><button class="btn primary" id="fin-save">Mark finished</button></div>',
+      sheet => {
+        sheet.querySelector('#fin-save').addEventListener('click', ev => {
+          const d = sheet.querySelector('#fin-date').value;
+          if (!d) return;
+          ev.currentTarget.disabled = true;
+          ev.currentTarget.textContent = 'Saving';
+          finishBook(row, d);
+        });
+      });
+  }
+
+  async function finishBook(row, date) {
     const rec = records('books').find(r => r._row === row);
     if (!rec) return;
     try {
-      const j = await api('update', { section: 'books', row, check: fingerprint('books', rec), record: { finished: todayISO() } });
+      const j = await api('update', { section: 'books', row, check: fingerprint('books', rec), record: { finished: date || todayISO() } });
       const i = state.data.books.findIndex(r => r._row === row);
       if (i >= 0) state.data.books[i] = j.record;
       persist();
+      closeModal();
       toast('Marked ' + String(rec.title).trim() + ' finished');
     } catch (e) { toast(e.message, true); }
     render();
@@ -2000,7 +2122,7 @@
     choose: el => openForm(el.dataset.sec, null),
     more: el => { listState(el.dataset.section).limit += PAGE_SIZE * 2; render(); },
     dashMore: () => { state.dashLimit += 30; render(); },
-    finishBook: el => { el.disabled = true; el.textContent = 'Saving'; finishBook(Number(el.dataset.row)); },
+    finishBook: el => openFinish(Number(el.dataset.row)),
     nextEp: el => {
       const s = showList().find(x => x.key === el.dataset.show);
       if (!s) return;
