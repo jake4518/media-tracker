@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.6.1';
+  const VERSION = '2.7.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -680,13 +680,12 @@
     h += '</div>';
 
     h += sectionHead('Recent episodes');
-    const groups = groupEpisodes(sortedDesc('episodes').slice(0, 200)).slice(0, RECENT_ROWS);
-    h += rowsHTML('episodes', groups, [
-      { label: '', w: '24px', html: g => thumb('show', g.show, 'xs') },
+    h += rowsHTML('episodes', sortedDesc('episodes').slice(0, 12), [
+      { label: '', w: '24px', html: r => thumb('show', r.show, 'xs') },
       { k: 'show', label: 'Show', w: 'minmax(0,2fr)', cls: 'strong' },
-      { k: null, label: 'Episodes', w: 'minmax(0,1fr)', fmt: g => epLabel(g.eps), cls: 'muted' },
+      { k: null, label: 'Episode', w: '66px', fmt: r => epCode(r), cls: 'muted' },
       { k: 'date', label: 'Date', w: '64px', fmt: fmtDate, cls: 'muted num' },
-    ], { editOf: g => 'episodes:' + g.eps[0]._row });
+    ]);
     h += '<button class="link-btn" data-go="#/tv/shows">All shows (' + num(shows.length) + ')</button>' +
       '<span class="link-sep">|</span>' +
       '<button class="link-btn" data-go="#/tv/episodes">All episodes (' + num(eps.length) + ')</button>';
@@ -1524,9 +1523,9 @@
       { k: 'episode', l: 'Episode', t: 'number', half: true },
       { k: 'through', l: 'Through episode', t: 'number', half: true, addOnly: true, hint: 'Optional, logs a batch' },
       { k: 'date', l: 'Date watched', t: 'date', half: true },
-      { k: 'runtime', l: 'Run time (minutes)', t: 'minutes', half: true },
       { k: 'year', l: 'Year of release', t: 'number', half: true },
-      { k: 'channel', l: 'Channel', t: 'text', list: 'channels' },
+      { k: 'channel', l: 'Channel', t: 'text', list: 'channels', half: true },
+      { k: 'runtime', l: 'Run time (minutes)', t: 'minutes', hint: 'Optional. Filled in automatically for confirmed shows.' },
     ],
     movies: [
       { k: 'title', l: 'Title', t: 'text', req: true, lookup: true },
@@ -1549,7 +1548,7 @@
   const FILL = {
     books: { author: 'author', year: 'year', pages: 'pages', genre: 'genre' },
     movies: { runtime: 'runtime', year: 'year', genre: 'genre' },
-    episodes: { runtime: 'runtime', year: 'year', channel: 'network' },
+    episodes: { year: 'year', channel: 'network' },
   };
   const FIELD_NAMES = { author: 'author', year: 'year', pages: 'pages', genre: 'genre', runtime: 'run time', channel: 'channel' };
 
@@ -1567,6 +1566,35 @@
       case 'drinks': return { date: today, drinks: 1 };
       default: return { date: today };
     }
+  }
+
+
+  // Dropdown lists from your sheet (Data validation), e.g. Channel. Falls back to the app's own list.
+  function sheetOptions(section, key) {
+    const o = state.data && state.data.options && state.data.options[section];
+    return o && o[key] && o[key].length ? o[key] : null;
+  }
+  // A show's network only counts as a channel if it's one of your dropdown options
+  function validChannel(section, value) {
+    const opts = sheetOptions(section, 'channel');
+    if (blank(value)) return '';
+    if (!opts) return value;
+    return opts.find(o => o.toLowerCase() === String(value).trim().toLowerCase()) || '';
+  }
+  function withSheetOptions(section, fields) {
+    return fields.map(f => {
+      const opts = sheetOptions(section, f.k);
+      return opts && (f.t === 'text' || f.t === 'select') ? Object.assign({}, f, { t: 'select', opts, list: null }) : f;
+    });
+  }
+
+  // The last few episodes you logged for a show, shown in the episode form
+  function epHistoryHTML(show, excludeRow) {
+    const key = norm(show);
+    if (!key) return '';
+    const eps = sortedDesc('episodes', records('episodes').filter(r => norm(r.show) === key && r._row !== excludeRow)).slice(0, 5);
+    if (!eps.length) return '<p class="eph-title">First time logging this show</p>';
+    return '<p class="eph-title">Last logged</p><ul class="eph">' + eps.map(r => '<li><span>' + esc(epCode(r)) + '</span><span>' + esc(fmtDate(r.date)) + '</span>' + (r.channel ? '<span class="eph-ch">' + esc(r.channel) + '</span>' : '') + '</li>').join('') + '</ul>';
   }
 
   function hmText(mins) { return blank(mins) ? '' : Math.floor(mins / 60) + ':' + pad(Math.round(mins % 60)); }
@@ -1635,7 +1663,7 @@
    */
   function openForm(section, rec, preset) {
     const isAdd = !rec;
-    const fields = FORMS[section].filter(f => !(f.addOnly && !isAdd) && !(f.t === 'ro' && isAdd));
+    const fields = withSheetOptions(section, FORMS[section].filter(f => !(f.addOnly && !isAdd) && !(f.t === 'ro' && isAdd)));
     const values = isAdd ? Object.assign(defaultsFor(section), preset || {}) : rec;
     const title = isAdd ? (section === 'episodes' ? 'Log episodes' : 'Add ' + TITLES[section]) : 'Edit ' + TITLES[section];
     const keyName = SEC[section].key;
@@ -1644,7 +1672,7 @@
       '<div class="sheet-head"><h2>' + esc(title) + '</h2>' + closeBtn + '</div>' +
       '<form id="rec-form" novalidate><div class="form-body">' +
       '<div class="form-media" id="form-media">' + formMediaHTML(section, values[keyName]) + '</div>' +
-      '<div class="form-grid">' + fields.map(f => fieldHTML(f, values[f.k])).join('') + '</div>' +
+      '<div class="form-grid">' + fields.map(f => fieldHTML(f, values[f.k]) + (section === 'episodes' && f.k === 'show' ? '<div class="field ep-history" id="ep-history">' + epHistoryHTML(values.show, rec ? rec._row : null) + '</div>' : '')).join('') + '</div>' +
       '<div class="form-warn" id="form-warn" hidden></div>' +
       '<div class="form-error" id="form-error" hidden></div></div>' +
       '<div class="form-actions" id="form-actions">' + (isAdd ? '' : '<button type="button" class="btn danger-text" id="del-btn">Delete</button><span class="spacer"></span>') +
@@ -1657,8 +1685,14 @@
         const form = sheet.querySelector('#rec-form');
         const dirty = new Set();
         form.addEventListener('input', e => { if (e.target.name) dirty.add(e.target.name); });
-        fields.filter(f => f.list).forEach(f => attachSuggest(form.elements[f.k], suggestions(f.list)));
+        fields.filter(f => f.list && form.elements[f.k] && form.elements[f.k].tagName === 'INPUT').forEach(f => attachSuggest(form.elements[f.k], suggestions(f.list)));
         if (isAdd && section === 'episodes') wireEpisodeAutofill(form, dirty);
+        if (section === 'episodes') {
+          const hist = sheet.querySelector('#ep-history');
+          const refresh = () => { hist.innerHTML = epHistoryHTML(form.elements.show.value, rec ? rec._row : null); };
+          form.elements.show.addEventListener('change', refresh);
+          form.elements.show.addEventListener('input', () => { if (showList().some(s => s.key === norm(form.elements.show.value))) refresh(); });
+        }
         const keyInput = form.elements[keyName];
         if (keyInput && SEC[section].kind) {
           keyInput.addEventListener('change', () => {
@@ -1818,7 +1852,8 @@
     const filled = [];
     Object.keys(FILL[section] || {}).forEach(field => {
       const el = form.elements[field];
-      const v = info[FILL[section][field]];
+      let v = info[FILL[section][field]];
+      if (field === 'channel') v = validChannel(section, v);
       if (el && !el.value.trim() && !blank(v)) { el.value = v; filled.push(FIELD_NAMES[field]); }
     });
     return filled;
@@ -1837,11 +1872,10 @@
         const last = s.lastEp;
         set('season', last.season);
         set('episode', blank(last.episode) ? '' : Number(last.episode) + 1);
-        set('runtime', blank(last.runtime) ? info.runtime : last.runtime);
         set('year', blank(last.year) ? info.year : last.year);
-        set('channel', blank(last.channel) ? info.network : last.channel);
+        set('channel', blank(last.channel) ? validChannel('episodes', info.network) : validChannel('episodes', last.channel) || last.channel);
       } else if (e) {
-        set('runtime', info.runtime); set('year', info.year); set('channel', info.network);
+        set('year', info.year); set('channel', validChannel('episodes', info.network));
       }
     };
     showInput.addEventListener('change', fill);
@@ -2130,9 +2164,8 @@
       openForm('episodes', null, {
         show: s.title, season: last.season,
         episode: blank(last.episode) ? '' : Number(last.episode) + 1,
-        runtime: blank(last.runtime) ? info.runtime : last.runtime,
         year: blank(last.year) ? info.year : last.year,
-        channel: blank(last.channel) ? info.network : last.channel,
+        channel: blank(last.channel) ? validChannel('episodes', info.network) : last.channel,
       });
     },
     setFinished: async el => {
