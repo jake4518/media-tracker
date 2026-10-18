@@ -516,3 +516,9 @@ input[type="date"] { color-scheme: dark; min-height: 44px; }
 .eph li span:first-child { font-weight: 600; }
 .eph li span:nth-child(2) { color: var(--muted); }
 .eph-ch { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ============ v2.8 ============ */
+.field[hidden] { display: none; }
+.batch-toggle .link-btn { padding: 0; font-size: 14px; text-align: left; }
+.small-link { padding: 4px 0 0; font-size: 13.5px; align-self: flex-start; }
+textarea.short { min-height: 64px; }

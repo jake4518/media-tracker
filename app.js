@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.7.0';
+  const VERSION = '2.8.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -1521,11 +1521,11 @@
       { k: 'show', l: 'Show', t: 'text', req: true, list: 'shows', lookup: true },
       { k: 'season', l: 'Season', t: 'number', half: true },
       { k: 'episode', l: 'Episode', t: 'number', half: true },
-      { k: 'through', l: 'Through episode', t: 'number', half: true, addOnly: true, hint: 'Optional, logs a batch' },
+      { k: 'through', l: 'Through episode', t: 'number', addOnly: true, batch: true, hint: 'Logs every episode from the first one through this one.' },
       { k: 'date', l: 'Date watched', t: 'date', half: true },
       { k: 'year', l: 'Year of release', t: 'number', half: true },
       { k: 'channel', l: 'Channel', t: 'text', list: 'channels', half: true },
-      { k: 'runtime', l: 'Run time (minutes)', t: 'minutes', hint: 'Optional. Filled in automatically for confirmed shows.' },
+      { k: 'runtime', l: 'Run time (min)', t: 'minutes', half: true, hint: 'Optional, filled in for you' },
     ],
     movies: [
       { k: 'title', l: 'Title', t: 'text', req: true, lookup: true },
@@ -1539,8 +1539,8 @@
     drinks: [
       { k: 'date', l: 'Date', t: 'date', req: true, half: true },
       { k: 'drinks', l: 'Drinks', t: 'number', step: '0.5', half: true },
-      { k: 'reason', l: 'Reason', t: 'text', list: 'reasons' },
-      { k: 'notes', l: 'Notes', t: 'text', hint: 'What you had, like 2 beers' },
+      { k: 'reason', l: 'Reason', t: 'text', fresh: true },
+      { k: 'notes', l: 'Notes', t: 'textarea', fresh: true, hint: 'What you had, like 2 beers' },
     ],
   };
 
@@ -1552,7 +1552,7 @@
   };
   const FIELD_NAMES = { author: 'author', year: 'year', pages: 'pages', genre: 'genre', runtime: 'run time', channel: 'channel' };
 
-  const ADD_LABELS = { books: 'Add book', episodes: 'Log episodes', movies: 'Add movie', drinks: 'Add drinks' };
+  const ADD_LABELS = { books: 'Add book', episodes: 'Log episode', movies: 'Add movie', drinks: 'Add drinks' };
   const ADDED_TOASTS = { books: 'Book added', movies: 'Movie added', drinks: 'Drinks added' };
   const TITLES = { books: 'book', episodes: 'episode', movies: 'movie', drinks: 'drinks' };
 
@@ -1618,7 +1618,7 @@
       case 'ro':
         return '<div class="' + cls + '"><label>' + esc(f.l) + '</label><div class="readonly">' + esc(blank(v) ? 'Calculated by your sheet' : (f.fmt ? f.fmt(v) : v)) + '</div></div>';
       case 'textarea':
-        input = '<textarea id="' + id + '" name="' + f.k + '">' + esc(val) + '</textarea>'; break;
+        input = '<textarea id="' + id + '" name="' + f.k + '"' + (f.fresh ? ' class="short" autocomplete="off"' : '') + '>' + esc(val) + '</textarea>'; break;
       case 'select': {
         const opts = f.opts.slice();
         if (val !== '' && !opts.includes(val)) opts.push(val);
@@ -1634,7 +1634,12 @@
       case 'hm':
         input = '<input id="' + id + '" name="' + f.k + '" type="text" inputmode="numeric" placeholder="H:MM" value="' + esc(hmText(v)) + '" autocomplete="off">'; break;
       default:
-        input = '<input id="' + id + '" name="' + f.k + '" type="text" value="' + esc(val) + '" autocomplete="off">';
+        input = '<input id="' + id + '" name="' + f.k + '" type="text" value="' + esc(val) + '" autocomplete="off"' + (f.fresh ? ' autocorrect="off" data-form-type="other"' : '') + '>';
+    }
+    if (f.batch) {
+      return '<div class="field batch-toggle" id="batch-open"><button type="button" class="link-btn" id="batch-btn">+ Log more than one episode</button></div>' +
+        '<div class="' + cls + '" id="batch-field"' + (val === '' ? ' hidden' : '') + '>' + label + input + hint +
+        '<button type="button" class="link-btn small-link" id="batch-close">Just one episode</button></div>';
     }
     if (f.lookup) {
       return '<div class="' + cls + '">' + label + '<div class="with-btn"><div class="grow">' + input + '</div>' +
@@ -1665,7 +1670,7 @@
     const isAdd = !rec;
     const fields = withSheetOptions(section, FORMS[section].filter(f => !(f.addOnly && !isAdd) && !(f.t === 'ro' && isAdd)));
     const values = isAdd ? Object.assign(defaultsFor(section), preset || {}) : rec;
-    const title = isAdd ? (section === 'episodes' ? 'Log episodes' : 'Add ' + TITLES[section]) : 'Edit ' + TITLES[section];
+    const title = isAdd ? (section === 'episodes' ? 'Log episode' : 'Add ' + TITLES[section]) : 'Edit ' + TITLES[section];
     const keyName = SEC[section].key;
 
     openModal(
@@ -1711,7 +1716,23 @@
         const findBtn = form.querySelector('[data-act=lookup]');
         if (findBtn) findBtn.addEventListener('click', ev => { ev.stopPropagation(); startLookup(section, form, sheet); });
         const saveBtn = form.querySelector('#save-btn');
-        const saveLabel = saveBtn.textContent;
+        let saveLabel = saveBtn.textContent;
+        if (isAdd && section === 'episodes') {
+          const open = sheet.querySelector('#batch-open'), box = sheet.querySelector('#batch-field');
+          const thr = form.elements.through, epIn = form.elements.episode;
+          const setLabel = () => {
+            const n = thr.value && epIn.value ? Number(thr.value) - Number(epIn.value) + 1 : 1;
+            saveLabel = n > 1 ? 'Log ' + n + ' episodes' : 'Log episode';
+            if (!saveBtn.classList.contains('warn')) saveBtn.textContent = saveLabel;
+          };
+          sheet.querySelector('#batch-btn').addEventListener('click', () => { open.hidden = true; box.hidden = false; thr.focus(); });
+          sheet.querySelector('#batch-close').addEventListener('click', () => {
+            thr.value = ''; box.hidden = true; open.hidden = false; setLabel();
+            form.dispatchEvent(new Event('change'));
+          });
+          thr.addEventListener('input', setLabel);
+          epIn.addEventListener('input', setLabel);
+        }
         const warnBox = form.querySelector('#form-warn');
         const guard = { ack: false };
         let lastWarn = '';
