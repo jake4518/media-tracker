@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.8.0';
+  const VERSION = '3.0.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -106,6 +106,7 @@
     if (section === 'episodes') return [v(r.show), v(r.season), v(r.episode), v(r.date)].join('|');
     if (section === 'movies') return [v(r.title), v(r.date)].join('|');
     if (section === 'drinks') return [v(r.date), v(r.drinks), v(r.reason)].join('|');
+    if (section === 'backlog') return [v(r.type), v(r.title)].join('|');
     return v(r.title);
   }
 
@@ -269,7 +270,7 @@
       state.syncing = false;
       render();
     }
-    if (okSync) autoMatch();
+    if (okSync) { autoMatch(); refreshStreamingIfDue(); }
   }
 
   // Finds covers and posters for anything not matched yet, a small batch at a time, newest first.
@@ -316,6 +317,7 @@
     sortedDesc('shows').forEach(s => add('show', { title: s.title, year: s.lastEp && s.lastEp.year }));
     sortedDesc('books').forEach(r => add('book', { title: String(r.title).trim(), author: r.author }));
     sortedDesc('movies').forEach(r => add('movie', { title: String(r.title).trim(), year: r.year }));
+    records('backlog').forEach(r => add(BL_KIND_OF_TYPE[r.type] || 'book', { title: String(r.title).trim(), author: r.author, year: r.year }));
     return q;
   }
 
@@ -346,6 +348,8 @@
     const path = location.hash.replace(/^#\/?/, '');
     if (LISTS[path]) return Object.assign({ path, list: true }, LISTS[path]);
     if (path === 'review') return { path, review: true, tab: null, list: false };
+    const b = /^(books|tv|movies)\/backlog$/.exec(path);
+    if (b) return { path, tab: b[1], backlog: true, kind: BL_KIND[b[1]], list: false };
     const m = /^tv\/episodes\/(.+)$/.exec(path);
     if (m) return Object.assign({ path, list: true, show: decodeURIComponent(m[1]) }, LISTS['tv/episodes']);
     const tab = TABS.some(t => t.id === path) ? path : 'dashboard';
@@ -393,6 +397,7 @@
     if (!state.data) return '<p class="summary">' + (state.syncError ? esc(state.syncError) : 'Loading your sheet...') + '</p>';
     if (r.list) return listPageHTML(r);
     if (r.review) return reviewHTML();
+    if (r.backlog) return backlogHTML(r);
     switch (r.tab) {
       case 'books': return booksHTML();
       case 'tv': return tvHTML();
@@ -625,7 +630,7 @@
     const reading = sortedDesc('books', all.filter(r => r.started && !r.finished));
     const today = todayISO();
 
-    let h = statsHTML(bookCells(finished.filter(r => inYear(r.finished))), bookCells(finished), sinceText(all.map(r => r.started || r.finished)));
+    let h = modeSwitchHTML('books', false) + statsHTML(bookCells(finished.filter(r => inYear(r.finished))), bookCells(finished), sinceText(all.map(r => r.started || r.finished)));
 
     h += sectionHead('Currently reading');
     h += '<div class="rows">';
@@ -664,7 +669,7 @@
     const shows = sortedDesc('shows');
     const watching = shows.filter(s => s.status === 'watching');
 
-    let h = statsHTML(tvCells(eps.filter(r => inYear(r.date)), shows.filter(s => inYear(s.last))), tvCells(eps, shows), sinceText(eps.map(r => r.date)));
+    let h = modeSwitchHTML('tv', false) + statsHTML(tvCells(eps.filter(r => inYear(r.date)), shows.filter(s => inYear(s.last))), tvCells(eps, shows), sinceText(eps.map(r => r.date)));
 
     h += sectionHead('Watching now');
     h += '<div class="rows">';
@@ -705,7 +710,7 @@
   function moviesHTML() {
     const all = records('movies');
     const dated = all.map(r => r.date).filter(Boolean).sort();
-    let h = statsHTML(movieCells(all.filter(r => inYear(r.date)), monthsSince(thisYear() + '-01-01')), movieCells(all, monthsSince(dated[0])), sinceText(dated));
+    let h = modeSwitchHTML('movies', false) + statsHTML(movieCells(all.filter(r => inYear(r.date)), monthsSince(thisYear() + '-01-01')), movieCells(all, monthsSince(dated[0])), sinceText(dated));
     h += sectionHead('Recently watched');
     h += rowsHTML('movies', sortedDesc('movies').slice(0, RECENT_ROWS), [
       { label: '', w: '24px', html: r => thumb('movie', r.title, 'xs') },
@@ -849,6 +854,13 @@
 
   function bindPage(r) {
     updateSyncLabel();
+    if (r.backlog) {
+      const st = blState(r.kind);
+      const g = document.getElementById('bl-genre'), s = document.getElementById('bl-stream');
+      if (g) g.addEventListener('change', () => { st.genre = g.value; st.open = null; render(); });
+      if (s) s.addEventListener('change', () => { st.stream = s.value; st.open = null; render(); });
+      return;
+    }
     if (!r.list) return;
     const ls = listState(r.section);
     const search = document.getElementById('list-search');
@@ -1363,6 +1375,332 @@
     render();
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Backlog: things to read and watch someday. Lives in its own "Backlog" tab in your sheet.
+  // ---------------------------------------------------------------------------
+  const BL_KIND = { books: 'book', tv: 'show', movies: 'movie' };
+  const BL_TYPE = { book: 'Book', show: 'TV', movie: 'Movie' };
+  const BL_KIND_OF_TYPE = { Book: 'book', TV: 'show', Movie: 'movie' };
+  const BL_TAB = { book: 'books', show: 'tv', movie: 'movies' };
+  const BL_NOUN = { book: 'book', show: 'show', movie: 'movie' };
+
+  function blState(kind) {
+    if (!state.bl) state.bl = {};
+    if (!state.bl[kind]) state.bl[kind] = { genre: 'all', stream: 'all', sort: 'az', open: null, confirm: null };
+    return state.bl[kind];
+  }
+  function blItems(kind) { return records('backlog').filter(r => r.type === BL_TYPE[kind]); }
+  const titleSortKey = t => String(t || '').trim().replace(/^(the|a|an)\s+/i, '').toLowerCase();
+  const lastName = n => String(n || '').trim().split(/\s+/).slice(-1)[0].toLowerCase();
+  const streamList = r => (blank(r.stream) || r.stream === 'Not streaming' ? [] : String(r.stream).split(/\s*,\s*/).filter(Boolean));
+
+  function modeSwitchHTML(tab, onBacklog) {
+    const n = blItems(BL_KIND[tab]).length;
+    const logLabel = tab === 'books' ? 'Reading log' : 'Watch log';
+    return '<div class="mode-switch" role="group" aria-label="View">' +
+      '<button class="' + (onBacklog ? '' : 'on') + '" aria-pressed="' + !onBacklog + '" data-go="#/' + tab + '">' + logLabel + '</button>' +
+      '<button class="' + (onBacklog ? 'on' : '') + '" aria-pressed="' + onBacklog + '" data-go="#/' + tab + '/backlog">Backlog' + (n ? ' ' + n : '') + '</button></div>';
+  }
+
+  function backlogHTML(r) {
+    const kind = r.kind, st = blState(kind), isBook = kind === 'book';
+    const all = blItems(kind);
+    const genres = [...new Set(all.map(i => String(i.genre || '').trim()).filter(Boolean))].sort();
+    if (st.genre !== 'all' && !genres.includes(st.genre)) st.genre = 'all';
+    const services = [...new Set(all.reduce((a, i) => a.concat(streamList(i)), []))].sort();
+    const list = all.filter(i => (st.genre === 'all' || String(i.genre || '').trim() === st.genre) &&
+      (isBook || st.stream === 'all' || (st.stream === 'none' ? !streamList(i).length : streamList(i).includes(st.stream))));
+    const sorted = list.slice().sort((a, b) => st.sort === 'az'
+      ? titleSortKey(a.title).localeCompare(titleSortKey(b.title))
+      : (b.added || '').localeCompare(a.added || '') || b._row - a._row);
+
+    let h = modeSwitchHTML(BL_TAB[kind], true);
+    h += '<div class="bl-filters"><label><span>Genre</span><select id="bl-genre"><option value="all">All genres</option>' +
+      genres.map(g => '<option value="' + esc(g) + '"' + (st.genre === g ? ' selected' : '') + '>' + esc(g) + ' (' + all.filter(i => String(i.genre || '').trim() === g).length + ')</option>').join('') + '</select></label>';
+    if (!isBook) {
+      h += '<label><span>Streaming</span><select id="bl-stream"><option value="all">All</option>' +
+        services.map(s => '<option value="' + esc(s) + '"' + (st.stream === s ? ' selected' : '') + '>' + esc(s) + '</option>').join('') +
+        '<option value="none"' + (st.stream === 'none' ? ' selected' : '') + '>Not streaming</option></select></label>';
+    }
+    h += '</div>';
+    h += '<div class="bl-sortbar"><span class="bl-label">Sort</span>' +
+      [['az', 'A to Z'], ['new', 'Newest']].map(([k, l]) => '<button class="chip' + (st.sort === k ? ' on' : '') + '" aria-pressed="' + (st.sort === k) + '" data-act="blSort" data-kind="' + kind + '" data-sort="' + k + '">' + l + '</button>').join('') +
+      '<button class="link-btn bl-add" data-act="blAdd" data-kind="' + kind + '">+ Add ' + BL_NOUN[kind] + '</button></div>';
+    h += '<p class="result-count">' + (list.length === all.length ? num(all.length) + ' ' + BL_NOUN[kind] + (all.length === 1 ? '' : 's') : num(list.length) + ' of ' + num(all.length) + ' shown') + '</p>';
+
+    if (!all.length) {
+      h += '<div class="empty">Nothing on your ' + BL_NOUN[kind] + ' backlog yet. Tap + Add ' + BL_NOUN[kind] + ' to start one.</div>';
+    } else if (!list.length) {
+      h += '<div class="empty">Nothing matches those filters.</div>';
+    } else if (isBook) {
+      const groups = new Map();
+      sorted.forEach(i => { const a = String(i.author || '').trim() || 'Unknown author'; if (!groups.has(a)) groups.set(a, []); groups.get(a).push(i); });
+      const order = [...groups.entries()].sort((a, b) => st.sort === 'az'
+        ? lastName(a[0]).localeCompare(lastName(b[0]))
+        : (b[1][0].added || '').localeCompare(a[1][0].added || ''));
+      order.forEach(([author, items]) => {
+        h += '<h2 class="bl-group">' + esc(author) + '<span>' + items.length + '</span></h2><div class="bl-list">' + items.map(i => blRowHTML(kind, i)).join('') + '</div>';
+      });
+    } else {
+      h += '<div class="bl-list bl-flat">' + sorted.map(i => blRowHTML(kind, i)).join('') + '</div>';
+    }
+    if (!isBook && all.length) h += '<p class="bl-credit">Where to watch is Canadian streaming only, checked weekly. Data from JustWatch via TMDB.</p>';
+    return h;
+  }
+
+  function blRowHTML(kind, i) {
+    const st = blState(kind), open = st.open === i._row, isBook = kind === 'book';
+    const line = [i.year, i.genre].filter(x => !blank(x)).join(', ');
+    const tag = isBook ? '' : '<span class="bl-tag' + (streamList(i).length ? '' : ' none') + '">' + esc(streamList(i).length ? streamList(i).join(', ') : (blank(i.stream) ? 'Checking' : 'Not streaming')) + '</span>';
+    let h = '<div class="bl-row' + (open ? ' open' : '') + '"><button class="bl-head" aria-expanded="' + open + '" data-act="blToggle" data-kind="' + kind + '" data-row="' + i._row + '">' +
+      '<span class="bl-main"><span class="bl-title">' + esc(i.title) + '</span>' + (line ? '<span class="bl-line">' + esc(line) + '</span>' : '') + '</span>' + tag + '</button>';
+    if (open) {
+      const e = entryFor(kind, i.title);
+      const det = e && e.source !== 'none' ? detailsCache.get(e.key) : null;
+      if (e && e.source !== 'none' && e.sourceId && !det && !blLoading.has(e.key)) loadBlDetails(kind, e);
+      const about = det ? (det.about || '') : e && e.source !== 'none' ? 'Loading description...' : '';
+      const facts = [
+        isBook ? ['Author', i.author] : null,
+        [isBook ? 'Published' : kind === 'show' ? 'First aired' : 'Released', i.year],
+        ['Genre', i.genre],
+        isBook ? null : ['Watch in Canada', streamList(i).length ? streamList(i).join(', ') : (blank(i.stream) ? 'Not checked yet' : 'Not streaming')],
+      ].filter(f => f && !blank(f[1]));
+      const confirming = st.confirm === i._row;
+      h += '<div class="bl-detail">' + (about ? '<p class="bl-about">' + esc(about) + '</p>' : '') +
+        '<dl class="bl-facts">' + facts.map(([k, v]) => '<div><dt>' + k + '</dt><dd>' + esc(v) + '</dd></div>').join('') + '</dl>' +
+        (blank(i.notes) ? '' : '<div class="bl-note"><span>Your note: </span>' + esc(i.notes) + '</div>') +
+        '<div class="bl-actions"><button class="btn small" data-act="blEdit" data-kind="' + kind + '" data-row="' + i._row + '">Edit</button>' +
+        '<button class="btn small ' + (confirming ? 'danger' : 'danger-text') + '" data-act="blRemove" data-kind="' + kind + '" data-row="' + i._row + '">' + (confirming ? 'Tap again to remove' : 'Remove') + '</button>' +
+        (det && det.url ? '<a class="bl-src" href="' + esc(det.url) + '" target="_blank" rel="noopener">View details</a>' : '') +
+        '<span class="bl-added">' + (i.added ? 'Added ' + esc(fmtDate(i.added)) : '') + '</span></div></div>';
+    }
+    return h + '</div>';
+  }
+
+  const blLoading = new Set();
+  async function loadBlDetails(kind, e) {
+    blLoading.add(e.key);
+    try {
+      const j = await api('matchDetails', { kind, id: e.sourceId, source: e.source });
+      detailsCache.set(e.key, j.details);
+    } catch (err) {
+      detailsCache.set(e.key, { about: '' });
+    }
+    blLoading.delete(e.key);
+    if (route().backlog && !modalOpen) render();
+  }
+
+  // Something you just logged was on your backlog: the script removed it. Show it, with Undo.
+  function backlogDropped(j) {
+    if (!j || !j.backlogRemoved || !j.backlogRemoved.length) return false;
+    state.data.backlog = j.backlog || records('backlog');
+    persist();
+    const removed = j.backlogRemoved;
+    const what = removed.length === 1 ? String(removed[0].title).trim() + ' came off your backlog' : removed.length + ' items came off your backlog';
+    setTimeout(() => toast(what, false, { label: 'Undo', run: () => undoBacklogRemoval(removed) }), 50);
+    return true;
+  }
+
+  async function undoBacklogRemoval(rows) {
+    try {
+      for (const r of rows) {
+        const rec = { type: r.type, title: r.title, author: r.author, year: r.year, genre: r.genre, stream: r.stream, notes: r.notes, added: r.added };
+        const j = await api('add', { section: 'backlog', record: rec });
+        state.data.backlog.push(j.record);
+      }
+      persist();
+      render();
+      toast('Put back on your backlog');
+    } catch (e) { toast(e.message, true); }
+  }
+
+  let streamRefreshing = false;
+  async function refreshStreamingIfDue() {
+    const watchable = records('backlog').filter(r => r.type === 'Movie' || r.type === 'TV');
+    const due = Date.now() - (state.data.backlogStreamAt || 0) > 7 * 86400000;
+    const unchecked = watchable.some(r => blank(r.stream));
+    if (!watchable.length || !(due || unchecked) || streamRefreshing) return;
+    streamRefreshing = true;
+    try {
+      const j = await api('refreshStreaming');
+      state.data.backlog = j.backlog;
+      state.data.backlogStreamAt = j.at;
+      persist();
+      if (route().backlog && !modalOpen && !isTyping()) render();
+    } catch (e) { /* try again next time */ }
+    streamRefreshing = false;
+  }
+
+  async function removeBacklogItem(kind, row) {
+    const rec = records('backlog').find(r => r._row === row);
+    if (!rec) return;
+    try {
+      await api('delete', { section: 'backlog', row, check: fingerprint('backlog', rec) });
+      state.data.backlog = state.data.backlog.filter(r => r._row !== row).map(r => (r._row > row ? Object.assign(r, { _row: r._row - 1 }) : r));
+      blState(kind).open = null;
+      blState(kind).confirm = null;
+      persist();
+      render();
+      toast('Removed from backlog', false, { label: 'Undo', run: () => undoBacklogRemoval([rec]) });
+    } catch (e) { toast(e.message, true); }
+  }
+
+  // ---------- Add or edit a backlog item ----------
+  function openBacklogForm(type, rec) {
+    const kind = BL_KIND_OF_TYPE[type], isAdd = !rec, isBook = type === 'Book';
+    const fields = [
+      { k: 'title', l: 'Title', t: 'text', req: true, lookup: true },
+      isBook ? { k: 'author', l: 'Author', t: 'text' } : null,
+      { k: 'year', l: isBook ? 'Year published' : 'Year', t: 'number', half: true },
+      { k: 'genre', l: 'Genre', t: 'text', half: true },
+      isBook ? null : { k: 'stream', l: 'Where to watch (Canada)', t: 'text', hint: 'Filled in automatically and re-checked every week' },
+      { k: 'notes', l: 'Notes (optional)', t: 'textarea', fresh: true },
+    ].filter(Boolean);
+    const values = rec || {};
+    const titleText = (isAdd ? 'Add ' : 'Edit ') + BL_NOUN[kind] + (isAdd ? ' to backlog' : '');
+    openModal(
+      '<div class="sheet-head"><h2>' + esc(titleText) + '</h2>' + closeBtn + '</div>' +
+      '<form id="bl-form" novalidate><div class="form-body">' +
+      '<div class="form-grid">' + fields.map(f => fieldHTML(f, values[f.k])).join('') + '</div>' +
+      '<div class="form-warn" id="form-warn" hidden></div>' +
+      '<div class="form-error" id="form-error" hidden></div></div>' +
+      '<div class="form-actions"><button type="button" class="btn" data-act="close">Cancel</button>' +
+      '<button type="submit" class="btn primary" id="save-btn">' + (isAdd ? 'Add to backlog' : 'Save changes') + '</button></div></form>',
+      sheet => {
+        const form = sheet.querySelector('#bl-form');
+        const el = k => form.elements[k];
+        const box = form.querySelector('#lookup-panel');
+        const saveBtn = form.querySelector('#save-btn'), saveLabel = saveBtn.textContent;
+        const warnBox = form.querySelector('#form-warn');
+        const guard = { ack: false, last: '' };
+        if (el('author')) attachSuggest(el('author'), suggestions('authors'));
+        const genreList = [...new Set(records('backlog').filter(r => r.type === type).map(r => r.genre)
+          .concat((isBook ? records('books') : kind === 'movie' ? records('movies') : []).map(r => r.genre))
+          .map(g => String(g || '').trim()).filter(Boolean))];
+        attachSuggest(el('genre'), genreList);
+
+        const checkStreaming = async () => {
+          if (isBook || !el('title').value.trim()) return;
+          const s = el('stream');
+          if (s.value.trim() && s.dataset.auto !== '1') return; // keep what you typed
+          s.value = 'Checking...';
+          s.dataset.auto = '1';
+          try {
+            const j = await api('streaming', { type, title: el('title').value.trim(), year: el('year').value });
+            if (s.dataset.auto === '1') s.value = j.stream || '';
+          } catch (e) { if (s.dataset.auto === '1') s.value = ''; }
+        };
+        if (!isBook) el('stream').addEventListener('input', () => { el('stream').dataset.auto = '0'; });
+
+        const fillFrom = info => {
+          const filled = [];
+          const put = (k, v) => { const f = el(k); if (f && !f.value.trim() && !blank(v)) { f.value = v; filled.push(k === 'year' ? 'year' : k); } };
+          if (el('author') && info.author) {
+            const a = el('author').value.trim();
+            if (a && a !== info.author && String(info.author).toLowerCase().includes(a.toLowerCase())) { el('author').value = info.author; filled.push('author'); }
+          }
+          put('author', info.author);
+          put('year', info.year);
+          put('genre', info.genre);
+          return filled;
+        };
+
+        const lookup = () => {
+          const title = el('title').value.trim();
+          if (!title) { box.hidden = false; box.innerHTML = '<p class="lookup-msg bad">Type a title first.</p>'; return; }
+          runLookup(box, kind, title, el('author') ? el('author').value.trim() : '', async cand => {
+            const official = String(cand.name || cand.title || '').trim();
+            const useTitle = isAdd && official ? official : title;
+            const j = await api('match', { kind, title: useTitle, candidate: cand });
+            saveEntries([j.entry]);
+            const filled = [];
+            if (isAdd && official && official !== title) { el('title').value = official; filled.push('title'); }
+            filled.push(...fillFrom(j.entry.info || {}));
+            box.hidden = true; box.innerHTML = '';
+            toast(filled.length ? 'Filled in ' + filled.join(', ') : 'Match saved');
+            refreshWarnings();
+            checkStreaming();
+          });
+        };
+        form.querySelector('[data-act=lookup]').addEventListener('click', ev => { ev.stopPropagation(); lookup(); });
+        el('title').addEventListener('change', () => {
+          const t = el('title').value.trim();
+          if (t.length < 2) return;
+          const e = entryFor(kind, t);
+          if (e && e.source !== 'none') { const f = fillFrom(e.info || {}); if (f.length) toast('Filled in ' + f.join(', ')); checkStreaming(); }
+          else if (isAdd) lookup();
+        });
+
+        const warnings = () => {
+          const t = norm(el('title').value);
+          const w = [];
+          if (!t) return w;
+          const dupe = records('backlog').find(r => r.type === type && norm(r.title) === t && (!rec || r._row !== rec._row));
+          if (dupe) w.push('This is already on your backlog' + (dupe.added ? ', added ' + fmtDate(dupe.added) : '') + '.');
+          if (isBook) { const b = records('books').find(r => norm(r.title) === t && r.finished); if (b) w.push('You already read this, finished ' + fmtDate(b.finished) + '.'); }
+          if (kind === 'movie') { const m = sortedDesc('movies').find(r => norm(r.title) === t); if (m) w.push('You watched this on ' + fmtDate(m.date) + '.'); }
+          if (kind === 'show') { const s = showList().find(x => x.key === t); if (s) w.push('You have ' + s.count + ' episode' + (s.count === 1 ? '' : 's') + ' of this logged already.'); }
+          return w;
+        };
+        const refreshWarnings = () => {
+          const w = warnings(), text = w.join('|');
+          if (text !== guard.last) {
+            guard.last = text;
+            warnBox.innerHTML = w.map(x => '<p>' + esc(x) + '</p>').join('');
+            warnBox.hidden = !w.length;
+            if (guard.ack) { guard.ack = false; saveBtn.textContent = saveLabel; saveBtn.classList.remove('warn'); }
+          }
+          return w;
+        };
+        let wt;
+        form.addEventListener('input', () => { clearTimeout(wt); wt = setTimeout(refreshWarnings, 250); });
+
+        form.addEventListener('submit', async ev => {
+          ev.preventDefault();
+          const errEl = form.querySelector('#form-error');
+          errEl.hidden = true;
+          let vals;
+          try { vals = collect(fields, form); } catch (e) { errEl.textContent = e.message; errEl.hidden = false; return; }
+          if (vals.stream === 'Checking...') vals.stream = '';
+          const w = refreshWarnings();
+          if (w.length && !guard.ack) {
+            guard.ack = true;
+            saveBtn.textContent = isAdd ? 'Add anyway' : 'Save anyway';
+            saveBtn.classList.add('warn');
+            return;
+          }
+          saveBtn.disabled = true; saveBtn.textContent = 'Saving';
+          try {
+            if (isAdd) {
+              const j = await api('add', { section: 'backlog', record: Object.assign({ type, added: todayISO() }, vals) });
+              state.data.backlog = records('backlog').concat([j.record]);
+              toast('Added to backlog');
+            } else {
+              const changes = {};
+              Object.keys(vals).forEach(k => { if (String(blank(rec[k]) ? '' : rec[k]) !== String(vals[k])) changes[k] = vals[k]; });
+              if (!Object.keys(changes).length) { closeModal(); toast('No changes to save'); return; }
+              const j = await api('update', { section: 'backlog', row: rec._row, check: fingerprint('backlog', rec), record: changes });
+              const i = state.data.backlog.findIndex(r => r._row === rec._row);
+              if (i >= 0) state.data.backlog[i] = j.record;
+              toast('Changes saved');
+            }
+            persist();
+            closeModal();
+            render();
+            autoMatch();
+            refreshStreamingIfDue(); // anything saved without a streaming answer gets checked now
+          } catch (e) {
+            errEl.textContent = e.message; errEl.hidden = false;
+            saveBtn.disabled = false; saveBtn.textContent = saveLabel;
+          }
+        });
+        if (isAdd) el('title').focus();
+      },
+      'form-sheet'
+    );
+  }
+
   // ---------- Show details ----------
   function openShow(key) {
     const s = showList().find(x => x.key === key);
@@ -1709,12 +2047,12 @@
               const filled = fillFromEntry(section, form, e);
               if (filled.length) toast('Filled in ' + filled.join(', '));
             } else if (isAdd && !(section === 'episodes' && showList().some(s => s.key === norm(val)))) {
-              startLookup(section, form, sheet); // new title: show likely matches right away
+              startLookup(section, form, sheet, isAdd); // new title: show likely matches right away
             }
           });
         }
         const findBtn = form.querySelector('[data-act=lookup]');
-        if (findBtn) findBtn.addEventListener('click', ev => { ev.stopPropagation(); startLookup(section, form, sheet); });
+        if (findBtn) findBtn.addEventListener('click', ev => { ev.stopPropagation(); startLookup(section, form, sheet, isAdd); });
         const saveBtn = form.querySelector('#save-btn');
         let saveLabel = saveBtn.textContent;
         if (isAdd && section === 'episodes') {
@@ -1784,20 +2122,32 @@
     );
   }
 
-  function startLookup(section, form, sheet) {
+  function startLookup(section, form, sheet, isAdd) {
     const kind = SEC[section].kind;
     const keyName = SEC[section].key;
-    const title = form.elements[keyName].value.trim();
+    let title = form.elements[keyName].value.trim();
     const box = form.querySelector('#lookup-panel');
     if (!title) { box.hidden = false; box.innerHTML = '<p class="lookup-msg bad">Type a title first.</p>'; return; }
     const author = form.elements.author ? form.elements.author.value.trim() : '';
     runLookup(box, kind, title, author, async cand => {
-      const j = await api('match', { kind, title, candidate: cand });
+      // Use the official title when adding. Never rename an existing entry, or a show you've already logged.
+      const official = String(cand.name || cand.title || '').trim();
+      const keyInput = form.elements[keyName];
+      const current = keyInput.value.trim() || title;
+      const canRename = isAdd && official && official !== current &&
+        !(section === 'episodes' && showList().some(s => s.key === norm(current)));
+      const useTitle = canRename ? official : current;
+      const j = await api('match', { kind, title: useTitle, candidate: cand });
       saveEntries([j.entry]);
-      const filled = fillFromEntry(section, form, j.entry);
+      const filled = [];
+      if (canRename) { keyInput.value = official; filled.push('title'); }
+      filled.push(...fillFromEntry(section, form, j.entry));
       box.hidden = true;
       box.innerHTML = '';
-      sheet.querySelector('#form-media').innerHTML = formMediaHTML(section, title);
+      sheet.querySelector('#form-media').innerHTML = formMediaHTML(section, useTitle);
+      const hist = sheet.querySelector('#ep-history');
+      if (hist) hist.innerHTML = epHistoryHTML(useTitle, null);
+      form.dispatchEvent(new Event('input')); // refresh the safeguard checks
       toast(filled.length ? 'Filled in ' + filled.join(', ') : 'Picture saved');
       render();
     });
@@ -1875,6 +2225,10 @@
       const el = form.elements[field];
       let v = info[FILL[section][field]];
       if (field === 'channel') v = validChannel(section, v);
+      if (field === 'author' && el && !blank(v) && el.value.trim() && el.value.trim() !== String(v).trim() &&
+          String(v).toLowerCase().includes(el.value.trim().toLowerCase())) {
+        el.value = v; filled.push('author'); return; // "sapkowski" becomes "Andrzej Sapkowski"
+      }
       if (el && !el.value.trim() && !blank(v)) { el.value = v; filled.push(FIELD_NAMES[field]); }
     });
     return filled;
@@ -1948,15 +2302,18 @@
         const j = await api('addEpisodes', { record: values });
         state.data.episodes.push(...j.records);
         toast(j.records.length === 1 ? 'Episode logged' : j.records.length + ' episodes logged');
+        backlogDropped(j);
       } else if (!rec) {
         const j = await api('add', { section, record: values });
         state.data[section].push(j.record);
         toast(ADDED_TOASTS[section]);
+        backlogDropped(j);
       } else {
         const j = await api('update', { section, row: rec._row, check: fingerprint(section, rec), record: changes });
         const i = state.data[section].findIndex(r => r._row === rec._row);
         if (i >= 0) state.data[section][i] = j.record;
         toast('Changes saved');
+        backlogDropped(j);
       }
       state.showsCache = null;
       persist();
@@ -2017,6 +2374,7 @@
       if (i >= 0) state.data.books[i] = j.record;
       persist();
       closeModal();
+      if (backlogDropped(j)) { render(); return; }
       toast('Marked ' + String(rec.title).trim() + ' finished');
     } catch (e) { toast(e.message, true); }
     render();
@@ -2130,11 +2488,18 @@
   // Toast
   // ---------------------------------------------------------------------------
   let toastTimer;
-  function toast(msg, bad) {
+  function toast(msg, bad, action) {
     $toast.textContent = msg;
-    $toast.className = 'show' + (bad ? ' bad' : '');
+    if (action) {
+      const btn = document.createElement('button');
+      btn.className = 'toast-btn';
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => { $toast.className = ''; action.run(); });
+      $toast.appendChild(btn);
+    }
+    $toast.className = 'show' + (bad ? ' bad' : '') + (action ? ' has-action' : '');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { $toast.className = ''; }, bad ? 5000 : 2600);
+    toastTimer = setTimeout(() => { $toast.className = ''; }, action ? 7000 : bad ? 5000 : 2600);
   }
 
   // ---------------------------------------------------------------------------
@@ -2165,11 +2530,21 @@
     rvRestart: () => { state.review = null; render(); },
     rvField: el => { const R = rv(); if (el.checked) R.fieldsOff.delete(el.dataset.field); else R.fieldsOff.add(el.dataset.field); render(); },
     rvTitle: el => { const R = rv(); if (el.checked) R.off.delete(el.dataset.id); else R.off.add(el.dataset.id); render(); },
+    blSort: el => { blState(el.dataset.kind).sort = el.dataset.sort; render(); },
+    blAdd: el => openBacklogForm(BL_TYPE[el.dataset.kind], null),
+    blToggle: el => { const st = blState(el.dataset.kind), row = Number(el.dataset.row); st.open = st.open === row ? null : row; st.confirm = null; render(); },
+    blEdit: el => { const rec = records('backlog').find(r => r._row === Number(el.dataset.row)); if (rec) openBacklogForm(rec.type, rec); },
+    blRemove: el => {
+      const st = blState(el.dataset.kind), row = Number(el.dataset.row);
+      if (st.confirm === row) { el.disabled = true; removeBacklogItem(el.dataset.kind, row); }
+      else { st.confirm = row; render(); }
+    },
     openReview: () => { modalOpen = false; $modal.innerHTML = ''; state.review = null; location.replace('#/review'); },
     settings: () => openSettings(),
     close: () => closeModal(),
     add: () => {
       const r = route();
+      if (r.backlog) return openBacklogForm(BL_TYPE[r.kind], null);
       if (r.list) return openForm(r.section === 'shows' ? 'episodes' : r.section, null);
       const map = { books: 'books', tv: 'episodes', movies: 'movies', drinks: 'drinks' };
       if (map[r.tab]) openForm(map[r.tab], null); else openChooser();
