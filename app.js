@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.0.0';
+  const VERSION = '3.0.1';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -1611,11 +1611,11 @@
           if (!title) { box.hidden = false; box.innerHTML = '<p class="lookup-msg bad">Type a title first.</p>'; return; }
           runLookup(box, kind, title, el('author') ? el('author').value.trim() : '', async cand => {
             const official = String(cand.name || cand.title || '').trim();
-            const useTitle = isAdd && official ? official : title;
+            const useTitle = official || title;
             const j = await api('match', { kind, title: useTitle, candidate: cand });
             saveEntries([j.entry]);
             const filled = [];
-            if (isAdd && official && official !== title) { el('title').value = official; filled.push('title'); }
+            if (official && official !== el('title').value.trim()) { el('title').value = official; filled.push('title'); }
             filled.push(...fillFrom(j.entry.info || {}));
             box.hidden = true; box.innerHTML = '';
             toast(filled.length ? 'Filled in ' + filled.join(', ') : 'Match saved');
@@ -1628,7 +1628,20 @@
           const t = el('title').value.trim();
           if (t.length < 2) return;
           const e = entryFor(kind, t);
-          if (e && e.source !== 'none') { const f = fillFrom(e.info || {}); if (f.length) toast('Filled in ' + f.join(', ')); checkStreaming(); }
+          if (e && e.source !== 'none') {
+            const f = [];
+            const official = String((e.info || {}).matchTitle || '').trim();
+            if (official && official !== t) {
+              el('title').value = official;
+              f.push('title');
+              // keep the match under the official title too, so the description and cover follow it
+              api('match', { kind, title: official, candidate: { id: e.sourceId, source: e.source, name: official, title: official, info: e.info, image: e.image } })
+                .then(j => saveEntries([j.entry])).catch(() => {});
+            }
+            f.push(...fillFrom(e.info || {}));
+            if (f.length) toast('Filled in ' + f.join(', '));
+            checkStreaming();
+          }
           else if (isAdd) lookup();
         });
 
