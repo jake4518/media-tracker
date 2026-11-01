@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.0.1';
+  const VERSION = '3.1.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -1381,7 +1381,7 @@
   // ---------------------------------------------------------------------------
   const BL_KIND = { books: 'book', tv: 'show', movies: 'movie' };
   const BL_TYPE = { book: 'Book', show: 'TV', movie: 'Movie' };
-  const BL_KIND_OF_TYPE = { Book: 'book', TV: 'show', Movie: 'movie' };
+  const BL_KIND_OF_TYPE = { Book: 'book', Series: 'book', TV: 'show', Movie: 'movie' };
   const BL_TAB = { book: 'books', show: 'tv', movie: 'movies' };
   const BL_NOUN = { book: 'book', show: 'show', movie: 'movie' };
 
@@ -1390,10 +1390,12 @@
     if (!state.bl[kind]) state.bl[kind] = { genre: 'all', stream: 'all', sort: 'az', open: null, confirm: null };
     return state.bl[kind];
   }
-  function blItems(kind) { return records('backlog').filter(r => r.type === BL_TYPE[kind]); }
+  function blItems(kind) { return records('backlog').filter(r => r.type === BL_TYPE[kind] || (kind === 'book' && r.type === 'Series')); }
   const titleSortKey = t => String(t || '').trim().replace(/^(the|a|an)\s+/i, '').toLowerCase();
-  const lastName = n => String(n || '').trim().split(/\s+/).slice(-1)[0].toLowerCase();
   const streamList = r => (blank(r.stream) || r.stream === 'Not streaming' ? [] : String(r.stream).split(/\s*,\s*/).filter(Boolean));
+
+  const seriesKey = n => (/^(n|y|none|no|yes)$/i.test(String(n || '').trim()) ? '' :
+    norm(n).replace(/^the\s+/, '').replace(/\s+(series|saga|trilogy|books|novels)$/, '').trim());
 
   function modeSwitchHTML(tab, onBacklog) {
     const n = blItems(BL_KIND[tab]).length;
@@ -1425,7 +1427,7 @@
     }
     h += '</div>';
     h += '<div class="bl-sortbar"><span class="bl-label">Sort</span>' +
-      [['az', 'A to Z'], ['new', 'Newest']].map(([k, l]) => '<button class="chip' + (st.sort === k ? ' on' : '') + '" aria-pressed="' + (st.sort === k) + '" data-act="blSort" data-kind="' + kind + '" data-sort="' + k + '">' + l + '</button>').join('') +
+      [['az', isBook ? 'Author A to Z' : 'A to Z'], ['new', 'Newest']].map(([k, l]) => '<button class="chip' + (st.sort === k ? ' on' : '') + '" aria-pressed="' + (st.sort === k) + '" data-act="blSort" data-kind="' + kind + '" data-sort="' + k + '">' + l + '</button>').join('') +
       '<button class="link-btn bl-add" data-act="blAdd" data-kind="' + kind + '">+ Add ' + BL_NOUN[kind] + '</button></div>';
     h += '<p class="result-count">' + (list.length === all.length ? num(all.length) + ' ' + BL_NOUN[kind] + (all.length === 1 ? '' : 's') : num(list.length) + ' of ' + num(all.length) + ' shown') + '</p>';
 
@@ -1436,8 +1438,9 @@
     } else if (isBook) {
       const groups = new Map();
       sorted.forEach(i => { const a = String(i.author || '').trim() || 'Unknown author'; if (!groups.has(a)) groups.set(a, []); groups.get(a).push(i); });
+      const unknown = name => (name === 'Unknown author' ? 1 : 0);
       const order = [...groups.entries()].sort((a, b) => st.sort === 'az'
-        ? lastName(a[0]).localeCompare(lastName(b[0]))
+        ? unknown(a[0]) - unknown(b[0]) || a[0].localeCompare(b[0], undefined, { sensitivity: 'base' })
         : (b[1][0].added || '').localeCompare(a[1][0].added || ''));
       order.forEach(([author, items]) => {
         h += '<h2 class="bl-group">' + esc(author) + '<span>' + items.length + '</span></h2><div class="bl-list">' + items.map(i => blRowHTML(kind, i)).join('') + '</div>';
@@ -1452,7 +1455,7 @@
   function blRowHTML(kind, i) {
     const st = blState(kind), open = st.open === i._row, isBook = kind === 'book';
     const line = [i.year, i.genre].filter(x => !blank(x)).join(', ');
-    const tag = isBook ? '' : '<span class="bl-tag' + (streamList(i).length ? '' : ' none') + '">' + esc(streamList(i).length ? streamList(i).join(', ') : (blank(i.stream) ? 'Checking' : 'Not streaming')) + '</span>';
+    const tag = isBook ? (i.type === 'Series' ? '<span class="bl-tag series">Series</span>' : '') : '<span class="bl-tag' + (streamList(i).length ? '' : ' none') + '">' + esc(streamList(i).length ? streamList(i).join(', ') : (blank(i.stream) ? 'Checking' : 'Not streaming')) + '</span>';
     let h = '<div class="bl-row' + (open ? ' open' : '') + '"><button class="bl-head" aria-expanded="' + open + '" data-act="blToggle" data-kind="' + kind + '" data-row="' + i._row + '">' +
       '<span class="bl-main"><span class="bl-title">' + esc(i.title) + '</span>' + (line ? '<span class="bl-line">' + esc(line) + '</span>' : '') + '</span>' + tag + '</button>';
     if (open) {
@@ -1461,8 +1464,9 @@
       if (e && e.source !== 'none' && e.sourceId && !det && !blLoading.has(e.key)) loadBlDetails(kind, e);
       const about = det ? (det.about || '') : e && e.source !== 'none' ? 'Loading description...' : '';
       const facts = [
+        i.type === 'Series' ? ['Type', 'Series (one entry for the whole series)'] : null,
         isBook ? ['Author', i.author] : null,
-        [isBook ? 'Published' : kind === 'show' ? 'First aired' : 'Released', i.year],
+        [i.type === 'Series' ? 'First book' : isBook ? 'Published' : kind === 'show' ? 'First aired' : 'Released', i.year],
         ['Genre', i.genre],
         isBook ? null : ['Watch in Canada', streamList(i).length ? streamList(i).join(', ') : (blank(i.stream) ? 'Not checked yet' : 'Not streaming')],
       ].filter(f => f && !blank(f[1]));
@@ -1548,7 +1552,8 @@
 
   // ---------- Add or edit a backlog item ----------
   function openBacklogForm(type, rec) {
-    const kind = BL_KIND_OF_TYPE[type], isAdd = !rec, isBook = type === 'Book';
+    const kind = BL_KIND_OF_TYPE[type], isAdd = !rec, isBook = kind === 'book';
+    let isSeries = type === 'Series';
     const fields = [
       { k: 'title', l: 'Title', t: 'text', req: true, lookup: true },
       isBook ? { k: 'author', l: 'Author', t: 'text' } : null,
@@ -1558,10 +1563,11 @@
       { k: 'notes', l: 'Notes (optional)', t: 'textarea', fresh: true },
     ].filter(Boolean);
     const values = rec || {};
-    const titleText = (isAdd ? 'Add ' : 'Edit ') + BL_NOUN[kind] + (isAdd ? ' to backlog' : '');
+    const titleText = (isAdd ? 'Add ' : 'Edit ') + (isSeries ? 'series' : BL_NOUN[kind]) + (isAdd ? ' to backlog' : '');
     openModal(
-      '<div class="sheet-head"><h2>' + esc(titleText) + '</h2>' + closeBtn + '</div>' +
+      '<div class="sheet-head"><h2 id="bl-head">' + esc(titleText) + '</h2>' + closeBtn + '</div>' +
       '<form id="bl-form" novalidate><div class="form-body">' +
+      (isBook ? '<label class="series-toggle"><input type="checkbox" id="bl-series"' + (isSeries ? ' checked' : '') + '><span><b>This is a series</b><small>One entry for the whole series, like Mistborn. It comes off your backlog when you start any book in it.</small></span></label>' : '') +
       '<div class="form-grid">' + fields.map(f => fieldHTML(f, values[f.k])).join('') + '</div>' +
       '<div class="form-warn" id="form-warn" hidden></div>' +
       '<div class="form-error" id="form-error" hidden></div></div>' +
@@ -1570,6 +1576,16 @@
       sheet => {
         const form = sheet.querySelector('#bl-form');
         const el = k => form.elements[k];
+        const seriesBox = sheet.querySelector('#bl-series');
+        const titleLabel = form.querySelector('label[for="f-title"]');
+        const applySeries = () => {
+          isSeries = !!(seriesBox && seriesBox.checked);
+          if (titleLabel) titleLabel.textContent = isSeries ? 'Series name' : 'Title';
+          el('title').placeholder = isSeries ? 'Like Mistborn' : '';
+          sheet.querySelector('#bl-head').textContent = (isAdd ? 'Add ' : 'Edit ') + (isSeries ? 'series' : 'book') + (isAdd ? ' to backlog' : '');
+          if (typeof refreshWarnings === 'function') refreshWarnings();
+        };
+        if (seriesBox) seriesBox.addEventListener('change', applySeries);
         const box = form.querySelector('#lookup-panel');
         const saveBtn = form.querySelector('#save-btn'), saveLabel = saveBtn.textContent;
         const warnBox = form.querySelector('#form-warn');
@@ -1610,7 +1626,7 @@
           const title = el('title').value.trim();
           if (!title) { box.hidden = false; box.innerHTML = '<p class="lookup-msg bad">Type a title first.</p>'; return; }
           runLookup(box, kind, title, el('author') ? el('author').value.trim() : '', async cand => {
-            const official = String(cand.name || cand.title || '').trim();
+            const official = isSeries ? '' : String(cand.name || cand.title || '').trim();
             const useTitle = official || title;
             const j = await api('match', { kind, title: useTitle, candidate: cand });
             saveEntries([j.entry]);
@@ -1630,7 +1646,7 @@
           const e = entryFor(kind, t);
           if (e && e.source !== 'none') {
             const f = [];
-            const official = String((e.info || {}).matchTitle || '').trim();
+            const official = isSeries ? '' : String((e.info || {}).matchTitle || '').trim();
             if (official && official !== t) {
               el('title').value = official;
               f.push('title');
@@ -1649,14 +1665,19 @@
           const t = norm(el('title').value);
           const w = [];
           if (!t) return w;
-          const dupe = records('backlog').find(r => r.type === type && norm(r.title) === t && (!rec || r._row !== rec._row));
+          const curType = isBook ? (isSeries ? 'Series' : 'Book') : type;
+          const dupe = records('backlog').find(r => r.type === curType && norm(r.title) === t && (!rec || r._row !== rec._row));
           if (dupe) w.push('This is already on your backlog' + (dupe.added ? ', added ' + fmtDate(dupe.added) : '') + '.');
-          if (isBook) { const b = records('books').find(r => norm(r.title) === t && r.finished); if (b) w.push('You already read this, finished ' + fmtDate(b.finished) + '.'); }
+          if (isBook && isSeries) {
+            const sk = seriesKey(el('title').value);
+            const started = sortedDesc('books').find(r => seriesKey(r.series) === sk || norm(r.title).indexOf(t + ':') === 0);
+            if (sk && started) w.push('You have already started this series: ' + String(started.title).trim() + (started.started ? ', ' + fmtDate(started.started) : '') + '.');
+          } else if (isBook) { const b = records('books').find(r => norm(r.title) === t && r.finished); if (b) w.push('You already read this, finished ' + fmtDate(b.finished) + '.'); }
           if (kind === 'movie') { const m = sortedDesc('movies').find(r => norm(r.title) === t); if (m) w.push('You watched this on ' + fmtDate(m.date) + '.'); }
           if (kind === 'show') { const s = showList().find(x => x.key === t); if (s) w.push('You have ' + s.count + ' episode' + (s.count === 1 ? '' : 's') + ' of this logged already.'); }
           return w;
         };
-        const refreshWarnings = () => {
+        var refreshWarnings = () => {
           const w = warnings(), text = w.join('|');
           if (text !== guard.last) {
             guard.last = text;
@@ -1686,12 +1707,14 @@
           saveBtn.disabled = true; saveBtn.textContent = 'Saving';
           try {
             if (isAdd) {
-              const j = await api('add', { section: 'backlog', record: Object.assign({ type, added: todayISO() }, vals) });
+              const j = await api('add', { section: 'backlog', record: Object.assign({ type: isBook ? (isSeries ? 'Series' : 'Book') : type, added: todayISO() }, vals) });
               state.data.backlog = records('backlog').concat([j.record]);
               toast('Added to backlog');
             } else {
               const changes = {};
               Object.keys(vals).forEach(k => { if (String(blank(rec[k]) ? '' : rec[k]) !== String(vals[k])) changes[k] = vals[k]; });
+              const newType = isBook ? (isSeries ? 'Series' : 'Book') : type;
+              if (newType !== rec.type) changes.type = newType;
               if (!Object.keys(changes).length) { closeModal(); toast('No changes to save'); return; }
               const j = await api('update', { section: 'backlog', row: rec._row, check: fingerprint('backlog', rec), record: changes });
               const i = state.data.backlog.findIndex(r => r._row === rec._row);
@@ -1708,6 +1731,7 @@
             saveBtn.disabled = false; saveBtn.textContent = saveLabel;
           }
         });
+        applySeries();
         if (isAdd) el('title').focus();
       },
       'form-sheet'
