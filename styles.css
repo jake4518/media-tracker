@@ -536,8 +536,13 @@ textarea.short { min-height: 64px; }
 .chip { border-radius: 99px; padding: 5px 11px; min-height: 32px; font-weight: 600; font-size: 13.5px; background: none; border: 1px solid var(--line); color: #c4ccd5; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .bl-add { margin-left: auto; padding: 6px 0; font-size: 14px; }
-.bl-group { margin: 14px 0 0; padding: 0 6px 5px; border-bottom: 1px solid var(--line); font: 600 16px/1.2 var(--display); display: flex; justify-content: space-between; align-items: baseline; }
-.bl-group span { font: 500 13.5px var(--body); color: var(--muted); }
+.bl-author { margin-top: 12px; }
+.bl-group { margin: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--panel); border-left: 3px solid var(--c-books); border-radius: 0 8px 8px 0; font: 600 14px/1.2 var(--body); color: var(--c-books); }
+.bl-gname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-gcount { margin-left: auto; font-weight: 500; color: var(--muted); }
+.bl-author .bl-head { padding-left: 16px; }
+.bl-author .bl-row { border-bottom-color: #1c2229; }
+.bl-author .bl-detail { padding-left: 16px; }
 .bl-flat { border-top: 1px solid var(--line); margin-top: 6px; }
 .bl-row { border-bottom: 1px solid var(--line); }
 .bl-head { display: flex; width: 100%; gap: 10px; align-items: center; text-align: left; background: none; border: 0; padding: 8px 6px; line-height: 1.3; }
@@ -567,3 +572,40 @@ textarea.short { min-height: 64px; }
 .series-toggle input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); flex: 0 0 auto; }
 .series-toggle b { display: block; font-weight: 600; }
 .series-toggle small { display: block; color: var(--muted); font-size: 13px; line-height: 1.4; }
+
+/* ============ v3.2 ============ */
+/* search results float over the form instead of pushing it around */
+.lookup-panel.floating {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 8; margin-top: 0;
+  max-height: 340px; overflow-y: auto; box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55); border-color: #2d3640;
+}
+.cand-close { display: block; width: 100%; background: var(--panel); border: 0; border-top: 1px solid var(--line); padding: 10px; color: var(--muted); font-weight: 600; font-size: 14px; }
+
+/* ============ v3.3: all books on a phone ============ */
+.bk-list { margin: 0 -16px; padding-right: 30px; position: relative; }
+.bk-group {
+  position: sticky; top: var(--hdr-h, 0px); z-index: 4; scroll-margin-top: var(--hdr-h, 0px);
+  display: flex; align-items: baseline; gap: 8px; padding: 9px 16px 7px;
+  background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.bk-key { font: 700 20px/1 var(--display); }
+.bk-sum { font-size: 13px; color: var(--muted); }
+.bk-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; width: 100%; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid #1c2229; padding: 8px 16px; line-height: 1.35;
+}
+.bk-row:hover { background: var(--panel); }
+.bk-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bk-date { font-size: 13.5px; color: #c4ccd5; text-align: right; }
+.bk-meta { font-size: 13.5px; color: #c4ccd5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bk-meta span, .bk-meta i { color: var(--muted); }
+.bk-days { font-size: 13px; color: var(--muted); text-align: right; }
+.bk-rail {
+  position: fixed; right: 4px; top: calc(50% + var(--hdr-h, 100px) / 2); transform: translateY(-50%); z-index: 6; width: 28px;
+  display: flex; flex-direction: column; align-items: center; padding: 6px 0;
+  background: rgba(17, 21, 26, 0.92); border: 1px solid var(--line); border-radius: 14px;
+  max-height: calc(100vh - var(--hdr-h, 100px) - 90px); overflow-y: auto; scrollbar-width: none;
+}
+.bk-rail button { background: none; border: 0; padding: 4px 0; width: 100%; font-size: 12px; font-weight: 600; color: var(--muted); }
+.bk-rail button:hover { color: var(--accent); }
+@media (min-width: 900px) { .bk-list { margin: 0; } .bk-rail { right: max(4px, calc((100vw - 1100px) / 2 - 36px)); } }

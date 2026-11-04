@@ -19,6 +19,12 @@ Setup takes about 15 minutes.
 
 The first time you open it, covers and posters fill in over a minute or two in the background.
 
+**Updating to 3.3:** paste the new Code.gs, redeploy as a New version, and upload app.js, styles.css and sw.js.
+
+**Updating to 3.2:** paste the new Code.gs, redeploy as a New version, and upload app.js, styles.css and sw.js.
+
+**Updating to 3.1:** paste the new Code.gs, redeploy as a New version, and upload app.js, styles.css and sw.js.
+
 **Updating to 3.0.1:** upload app.js and sw.js. No script changes.
 
 **Updating to 3.0:** paste the new Code.gs, redeploy as a New version, and upload app.js, styles.css and sw.js. The Backlog tab is added to your sheet the first time the app loads.
@@ -101,7 +107,7 @@ Each device remembers its own connection. **Settings > Disconnect this device** 
 - **TV shows** get their stats from your episode log: started, last watched, episodes watched (and out of how many have aired), time watched and days to finish. A show counts as finished when it has ended and you've logged every episode, or when you tap **Mark finished**. The shows table in your sheet is left alone.
 - **Books** has "Currently reading" (started but no finish date) with a **Mark finished** button that asks for the date.
 - **TV** has "Watching now" (anything watched in the last 30 days that isn't finished) with a **Log E#** button that pre-fills the next episode. When logging, pick a show and you'll see your last 5 logged episodes of it, and the season, next episode, year and channel fill in from your last entry. Channel uses the dropdown list from your sheet. Run time isn't guessed; for shows whose match you've confirmed, the script saves each episode's real run time when you log it. The form logs one episode by default. Tap **+ Log more than one episode** to open the Through episode box for a batch, which still writes one row per episode like your sheet already does.
-- **All lists** have search and sorting. Tap any row to edit it.
+- **All lists** have search and sorting. Tap any row to edit it. All books shows two lines per book, with the year (or letter, for A to Z) pinned at the top while you scroll and a strip on the right to jump between them.
 - Data is cached on the device, so the app opens instantly and shows your last sync even offline. It refreshes when you open it after 5+ minutes away, or when you tap the sync label up top.
 
 ## Backlog (things to read and watch someday)
@@ -110,6 +116,9 @@ Each device remembers its own connection. **Settings > Disconnect this device** 
 - **Books** are grouped by author with a Genre filter. **Movies and TV** are one list with Genre and Streaming filters. Sort A to Z or Newest.
 - Tap a row for its description, details, your note, Edit and Remove (tap Remove twice; Undo is offered).
 - **Find info** on the backlog always fills in the official title (adding or editing), plus author, year, genre and where to watch.
+- Lookups only return English titles (other languages and alphabets are skipped). For books you can look up by author alone. Results float over the form so nothing jumps, and once you've picked a match your edits are left alone.
+- Adding warns about close matches already on your backlog (same or near title, same author) and anything you've already read, are reading, or watched.
+- **Series:** when adding a book, tick **This is a series** to add one entry for a whole series (like Mistborn). It shows a Series tag, Find info fills the author and genre but keeps your series name, and it comes off the backlog as soon as you start any book in it (matched by your Books tab's Series column, or a title like "Mistborn: The Final Empire").
 - **Where to watch** shows Canadian streaming services (subscription and free), checked automatically every week. Data from JustWatch via TMDB, so it needs your TMDB_KEY.
 - **Auto-cleanup:** finishing a book, logging a movie, or logging any episode of a show removes it from the backlog. You'll see a message with Undo.
 - It all lives in a **Backlog** tab in your sheet (Type, Title, Author, Year, Genre, Where to watch (CA), Notes, Added), created automatically the first time the app loads. You can add or edit rows there directly too.

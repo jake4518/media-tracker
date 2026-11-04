@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.1.0';
+  const VERSION = '3.3.0';
   const KEYS = { config: 'mt.config', data: 'mt.data' };
   const RECENT_ROWS = 8;
   const PAGE_SIZE = 150;
@@ -362,6 +362,7 @@
   const ICONS = {
     gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
     back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+    person: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>',
   };
 
   function render() {
@@ -843,6 +844,7 @@
       [['new', 'Newest first'], ['old', 'Oldest first'], ['az', 'A to Z']].map(o => '<option value="' + o[0] + '"' + (ls.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
       '</select></div>';
     if (r.show) h += '<div class="chip">Only ' + esc(onlyShow ? onlyShow.title : r.show) + '<button data-go="#/tv/episodes" aria-label="Show all episodes">&times;</button></div>';
+    if (section === 'books') return h + booksListHTML(list, ls);
     h += '<p class="result-count">' + num(list.length) + ' ' + (list.length === 1 ? 'row' : 'rows') + '</p>';
     h += '<div class="table-wrap" style="--min-w:' + minW + 'px">' + rowsHTML(section, list.slice(0, ls.limit), cols, {
       empty: ls.q ? 'No matches.' : 'Nothing here yet.',
@@ -852,7 +854,56 @@
     return h;
   }
 
+  // All books, phone friendly: grouped by year (or first letter for A to Z), headers stay pinned while you scroll
+  function booksListHTML(list, ls) {
+    const az = ls.sort === 'az';
+    const keyOf = b => (az ? (titleSortKey(b.title).charAt(0).toUpperCase().replace(/[^A-Z]/, '#') || '#')
+      : b.finished ? b.finished.slice(0, 4) : b.started ? 'Reading now' : 'No dates');
+    if (az) list = list.slice().sort((a, b) => { // "The Hobbit" files under H, numbers last
+      const ka = titleSortKey(a.title), kb = titleSortKey(b.title);
+      return (/^[a-z]/.test(ka) ? 0 : 1) - (/^[a-z]/.test(kb) ? 0 : 1) || ka.localeCompare(kb);
+    });
+    const groups = new Map();
+    list.forEach(b => { const k = keyOf(b); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); });
+    const fmtShort = { 'E-Book': 'E-book', 'Audio Book': 'Audiobook', 'Physical': 'Print' };
+    let h = '<p class="result-count">' + num(list.length) + ' ' + (list.length === 1 ? 'book' : 'books') + '</p><div class="bk-list">';
+    if (!list.length) h += '<div class="empty">' + (ls.q ? 'No matches.' : 'Nothing here yet.') + '</div>';
+    const ids = [];
+    groups.forEach((items, key) => {
+      const id = 'grp-' + String(key).replace(/[^A-Za-z0-9]/g, '');
+      ids.push([id, key]);
+      const days = items.map(b => Number(b.days)).filter(n => n > 0);
+      const avg = days.length ? Math.round(days.reduce((a, c) => a + c, 0) / days.length) : null;
+      h += '<div class="bk-group" id="' + id + '"><span class="bk-key">' + esc(key) + '</span><span class="bk-sum">' + items.length + (items.length === 1 ? ' book' : ' books') +
+        (avg && !az ? ', about ' + avg + ' days each' : '') + '</span></div>';
+      items.forEach(b => {
+        const meta = [b.format ? (fmtShort[b.format] || b.format) + (b.library === 'Yes' ? ' from library' : '') : '', Number(b.pages) > 0 ? num(b.pages) + ' pages' : ''].filter(Boolean).join(', ');
+        const date = b.finished || b.started;
+        const d = parseISO(date);
+        const dateText = d ? (az ? fmtDate(date) : MONTHS[d.getMonth()] + ' ' + d.getDate()) : '';
+        const days = Number(b.days) > 0 ? b.days + (Number(b.days) === 1 ? ' day' : ' days') : (b.started && !b.finished ? 'reading' : '');
+        h += '<button class="bk-row" data-edit="books:' + b._row + '">' +
+          '<span class="bk-title">' + esc(String(b.title).trim()) + '</span><span class="bk-date">' + esc(dateText) + '</span>' +
+          '<span class="bk-meta">' + (blank(b.author) ? '<i>No author yet</i>' : esc(String(b.author).trim())) + (meta ? '<span>, ' + esc(meta) + '</span>' : '') + '</span>' +
+          '<span class="bk-days">' + esc(days) + '</span></button>';
+      });
+    });
+    h += '</div>';
+    if (ids.length > 2) {
+      h += '<nav class="bk-rail" aria-label="Jump to">' + ids.map(([id, key]) =>
+        '<button data-act="jump" data-target="' + id + '">' + esc(/^\d{4}$/.test(key) ? '\u2019' + key.slice(2) : key.length > 2 ? key.charAt(0) : key) + '</button>').join('') + '</nav>';
+    }
+    return h;
+  }
+
+  // the pinned headers sit just under the app's own header
+  function setHeaderOffset() {
+    const top = document.querySelector('.top');
+    if (top) document.documentElement.style.setProperty('--hdr-h', top.offsetHeight + 'px');
+  }
+
   function bindPage(r) {
+    setHeaderOffset();
     updateSyncLabel();
     if (r.backlog) {
       const st = blState(r.kind);
@@ -1397,6 +1448,15 @@
   const seriesKey = n => (/^(n|y|none|no|yes)$/i.test(String(n || '').trim()) ? '' :
     norm(n).replace(/^the\s+/, '').replace(/\s+(series|saga|trilogy|books|novels)$/, '').trim());
 
+  // Same title, or one clearly contains the other ("Dune" and "Dune: Part Two" are not close; "The Hobbit" and "Hobbit" are)
+  function closeTitle(a, b) {
+    const x = looseTitle(a), y = looseTitle(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const [s, l] = x.length < y.length ? [x, y] : [y, x];
+    return s.length >= 6 && s.length / l.length >= 0.6 && l.includes(s);
+  }
+
   function modeSwitchHTML(tab, onBacklog) {
     const n = blItems(BL_KIND[tab]).length;
     const logLabel = tab === 'books' ? 'Reading log' : 'Watch log';
@@ -1443,7 +1503,8 @@
         ? unknown(a[0]) - unknown(b[0]) || a[0].localeCompare(b[0], undefined, { sensitivity: 'base' })
         : (b[1][0].added || '').localeCompare(a[1][0].added || ''));
       order.forEach(([author, items]) => {
-        h += '<h2 class="bl-group">' + esc(author) + '<span>' + items.length + '</span></h2><div class="bl-list">' + items.map(i => blRowHTML(kind, i)).join('') + '</div>';
+        h += '<section class="bl-author"><h2 class="bl-group">' + ICONS.person + '<span class="bl-gname">' + esc(author) + '</span><span class="bl-gcount">' + items.length + '</span></h2>' +
+          '<div class="bl-list">' + items.map(i => blRowHTML(kind, i)).join('') + '</div></section>';
       });
     } else {
       h += '<div class="bl-list bl-flat">' + sorted.map(i => blRowHTML(kind, i)).join('') + '</div>';
@@ -1622,18 +1683,27 @@
           return filled;
         };
 
+        box.dataset.closable = '1';
+        box.classList.add('floating');
+        let looked = !isAdd;   // only look things up by themselves once, when adding
+        let matched = false;   // after you pick a match, your edits are left alone
         const lookup = () => {
+          looked = true;
           const title = el('title').value.trim();
-          if (!title) { box.hidden = false; box.innerHTML = '<p class="lookup-msg bad">Type a title first.</p>'; return; }
-          runLookup(box, kind, title, el('author') ? el('author').value.trim() : '', async cand => {
+          const author = el('author') ? el('author').value.trim() : '';
+          if (!title && !author) { box.hidden = false; box.innerHTML = '<p class="lookup-msg bad">Type a ' + (isBook ? 'title or an author' : 'title') + ' first.</p><button type="button" class="cand-close">Close</button>'; wireClose(box); return; }
+          if (!title && !isBook) return;
+          runLookup(box, kind, title, author, async cand => {
             const official = isSeries ? '' : String(cand.name || cand.title || '').trim();
             const useTitle = official || title;
             const j = await api('match', { kind, title: useTitle, candidate: cand });
             saveEntries([j.entry]);
             const filled = [];
             if (official && official !== el('title').value.trim()) { el('title').value = official; filled.push('title'); }
+            if (!el('title').value.trim() && cand.title) { el('title').value = String(cand.name || cand.title).trim(); filled.push('title'); }
             filled.push(...fillFrom(j.entry.info || {}));
             box.hidden = true; box.innerHTML = '';
+            matched = true;
             toast(filled.length ? 'Filled in ' + filled.join(', ') : 'Match saved');
             refreshWarnings();
             checkStreaming();
@@ -1642,7 +1712,7 @@
         form.querySelector('[data-act=lookup]').addEventListener('click', ev => { ev.stopPropagation(); lookup(); });
         el('title').addEventListener('change', () => {
           const t = el('title').value.trim();
-          if (t.length < 2) return;
+          if (t.length < 2 || matched) return; // already matched: your edits stay as typed
           const e = entryFor(kind, t);
           if (e && e.source !== 'none') {
             const f = [];
@@ -1656,25 +1726,39 @@
             }
             f.push(...fillFrom(e.info || {}));
             if (f.length) toast('Filled in ' + f.join(', '));
+            matched = true;
             checkStreaming();
           }
-          else if (isAdd) lookup();
+          else if (!looked) lookup();
+        });
+        // switching between book and series looks it up again
+        if (seriesBox) seriesBox.addEventListener('change', () => {
+          if (el('title').value.trim() || (el('author') && el('author').value.trim())) { matched = false; lookup(); }
         });
 
         const warnings = () => {
-          const t = norm(el('title').value);
+          const title = el('title').value.trim(), t = norm(title);
+          const author = el('author') ? el('author').value.trim() : '';
           const w = [];
           if (!t) return w;
-          const curType = isBook ? (isSeries ? 'Series' : 'Book') : type;
-          const dupe = records('backlog').find(r => r.type === curType && norm(r.title) === t && (!rec || r._row !== rec._row));
-          if (dupe) w.push('This is already on your backlog' + (dupe.added ? ', added ' + fmtDate(dupe.added) : '') + '.');
+          const sameAuthor = a => !author || !String(a || '').trim() || authorsOverlap(author, a);
+          const by = a => (String(a || '').trim() ? ' by ' + String(a).trim() : '');
+          // on the backlog already (same or very close title; for books, same author too)
+          const dupes = records('backlog').filter(r => (!rec || r._row !== rec._row) && BL_KIND_OF_TYPE[r.type] === kind &&
+            closeTitle(title, r.title) && (!isBook || sameAuthor(r.author)));
+          dupes.slice(0, 2).forEach(d => w.push((norm(d.title) === t ? 'Already on your backlog: ' : 'Close match on your backlog: ') + String(d.title).trim() + by(d.author) +
+            (d.type === 'Series' ? ' (series)' : '') + (d.added ? ', added ' + fmtDate(d.added) : '') + '.'));
           if (isBook && isSeries) {
-            const sk = seriesKey(el('title').value);
+            const sk = seriesKey(title);
             const started = sortedDesc('books').find(r => seriesKey(r.series) === sk || norm(r.title).indexOf(t + ':') === 0);
             if (sk && started) w.push('You have already started this series: ' + String(started.title).trim() + (started.started ? ', ' + fmtDate(started.started) : '') + '.');
-          } else if (isBook) { const b = records('books').find(r => norm(r.title) === t && r.finished); if (b) w.push('You already read this, finished ' + fmtDate(b.finished) + '.'); }
-          if (kind === 'movie') { const m = sortedDesc('movies').find(r => norm(r.title) === t); if (m) w.push('You watched this on ' + fmtDate(m.date) + '.'); }
-          if (kind === 'show') { const s = showList().find(x => x.key === t); if (s) w.push('You have ' + s.count + ' episode' + (s.count === 1 ? '' : 's') + ' of this logged already.'); }
+          } else if (isBook) {
+            const b = sortedDesc('books').find(r => closeTitle(title, r.title) && sameAuthor(r.author));
+            if (b) w.push(b.finished ? 'You already read ' + String(b.title).trim() + by(b.author) + ', finished ' + fmtDate(b.finished) + '.'
+              : 'You are reading ' + String(b.title).trim() + ' right now, started ' + fmtDate(b.started) + '.');
+          }
+          if (kind === 'movie') { const m = sortedDesc('movies').find(r => closeTitle(title, r.title)); if (m) w.push('You watched ' + String(m.title).trim() + ' on ' + fmtDate(m.date) + '.'); }
+          if (kind === 'show') { const s = sortedDesc('shows').find(x => closeTitle(title, x.title)); if (s) w.push('You have ' + s.count + ' episode' + (s.count === 1 ? '' : 's') + ' of ' + s.title + ' logged, last on ' + fmtDate(s.last) + '.'); }
           return w;
         };
         var refreshWarnings = () => {
@@ -1807,6 +1891,13 @@
   }
 
   // Runs a search and shows the results as a pickable list
+  // Latin alphabet (accents are fine), digits and punctuation only
+  const isLatinText = s => !/[^\u0000-\u024F\u1E00-\u1EFF\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]/.test(String(s || ''));
+  function wireClose(box) {
+    const c = box.querySelector('.cand-close');
+    if (c) c.addEventListener('click', () => { box.hidden = true; box.innerHTML = ''; });
+  }
+
   async function runLookup(box, kind, query, author, onPick) {
     box.hidden = false;
     box.innerHTML = '<p class="lookup-msg">Searching...</p>';
@@ -1817,11 +1908,14 @@
       box.innerHTML = '<p class="lookup-msg bad">' + esc(e.message) + '</p>';
       return;
     }
-    if (!results.length) { box.innerHTML = '<p class="lookup-msg">No matches found. Try a shorter title.</p>'; return; }
+    results = results.filter(c => isLatinText(c.title)); // never show titles in other alphabets
+    const closeRow = box.dataset.closable ? '<button type="button" class="cand-close">Close</button>' : '';
+    if (!results.length) { box.innerHTML = '<p class="lookup-msg">No matches found. Try a shorter title' + (kind === 'book' ? ', or just the author' : '') + '.</p>' + closeRow; wireClose(box); return; }
     box.innerHTML = results.map((c, i) => '<button type="button" class="cand" data-i="' + i + '">' +
       (c.image ? '<img class="thumb md" src="' + esc(c.image) + '" alt="" loading="lazy">' : '<span class="thumb md ph ' + COLOR[kind] + '"></span>') +
       '<span><span class="cand-title">' + esc(c.title) + '</span><span class="cand-sub">' + esc([c.year, c.sub].filter(Boolean).join(', ')) + '</span>' +
-      (kind === 'book' ? '<span class="cand-src">' + (c.source === 'googlebooks' ? 'Google Books' : 'Open Library') + '</span>' : '') + '</span></button>').join('');
+      (kind === 'book' ? '<span class="cand-src">' + (c.source === 'googlebooks' ? 'Google Books' : 'Open Library') + '</span>' : '') + '</span></button>').join('') + closeRow;
+    wireClose(box);
     box.querySelectorAll('.cand').forEach(b => b.addEventListener('click', async () => {
       box.querySelectorAll('.cand').forEach(x => { x.disabled = true; });
       b.classList.add('picked');
@@ -2544,6 +2638,10 @@
   // ---------------------------------------------------------------------------
   const ACTIONS = {
     sync: () => sync(),
+    jump: el => {
+      const t = document.getElementById(el.dataset.target);
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
     syncNow: () => { closeModal(); sync(); },
     rvOpen: el => {
       const R = rv();
@@ -2668,6 +2766,8 @@
     span.textContent = img.dataset.l || '';
     img.replaceWith(span);
   }, true);
+
+  window.addEventListener('resize', setHeaderOffset);
 
   window.addEventListener('hashchange', () => {
     if (modalOpen) { modalOpen = false; $modal.innerHTML = ''; }
